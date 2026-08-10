@@ -1,0 +1,675 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet data-dc-atomics="">
+<style>
+  body{margin:0;background:#15161a;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;}
+  * { box-sizing: border-box; }
+  ::-webkit-scrollbar{width:9px;height:9px;}
+  ::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.14);border-radius:5px;}
+  ::-webkit-scrollbar-track{background:transparent;}
+  .tree-row:hover .tree-row-bg{background:rgba(255,255,255,0.05);}
+  .th-btn:hover{color:#e8e8ea !important;}
+</style>
+</helmet>
+
+<div style="width:1440px;height:900px;background:#0e0f11;border-radius:12px;overflow:hidden;box-shadow:0 30px 80px rgba(0,0,0,0.5);display:flex;flex-direction:column;font-size:12.5px;color:#e8e8ea;">
+
+  <!-- macOS title bar -->
+  
+
+  <!-- Body: two panes -->
+  <div style="flex:1;display:flex;min-height:0;">
+
+    <!-- LEFT: OID tree -->
+    <sc-if value="{{ leftVisible }}" hint-placeholder-val="{{ true }}">
+    <div style="width:{{ leftWidth }}px;flex:none;background:#1a1b1e;display:flex;flex-direction:column;min-height:0;">
+
+      <!-- Sidebar header -->
+      <div style="flex:none;height:30px;display:flex;align-items:center;padding:0 8px;border-bottom:1px solid rgba(255,255,255,0.07);">
+        <button onClick="{{ onToggleLeft }}" title="Hide sidebar" style="width:24px;height:24px;border:none;background:transparent;color:#9a9ba0;font-size:13px;cursor:pointer;border-radius:5px;display:flex;align-items:center;justify-content:center;" style-hover="background:rgba(255,255,255,0.08);color:#e8e8ea;">▤</button>
+      </div>
+
+      <!-- MIB directories panel -->
+      <div style="flex:none;padding:12px 14px 10px;border-bottom:1px solid rgba(255,255,255,0.07);">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+          <div style="font-size:10.5px;font-weight:700;letter-spacing:0.04em;color:#71727a;text-transform:uppercase;">MIB Directories</div>
+          <button style="width:18px;height:18px;border-radius:4px;border:1px solid rgba(255,255,255,0.12);background:#26272b;color:#9a9ba0;font-size:12px;line-height:1;cursor:pointer;">+</button>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:4px;">
+          <sc-for list="{{ mibDirs }}" as="dir" hint-placeholder-count="2">
+            <div style="display:flex;align-items:center;gap:6px;font-size:11px;color:#9a9ba0;">
+              <div style="width:9px;height:7px;flex:none;background:#5a5c63;border-radius:1px 2px 2px 2px;"></div>
+              <div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:ui-monospace,Menlo,monospace;">{{ dir }}</div>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+
+      <!-- Search -->
+      <div style="flex:none;padding:10px 14px;border-bottom:1px solid rgba(255,255,255,0.07);">
+        <input value="{{ filterText }}" onChange="{{ onFilterChange }}" placeholder="Filter OIDs…" style="width:100%;height:26px;background:#0e0f11;border:1px solid rgba(255,255,255,0.1);border-radius:6px;color:#e8e8ea;font-size:11.5px;padding:0 9px;outline:none;">
+      </div>
+
+      <!-- Tree -->
+      <div style="flex:1;overflow-y:auto;padding:6px 6px 16px;">
+        <sc-for list="{{ flatNodes }}" as="node" hint-placeholder-count="10">
+          <div class="tree-row" onClick="{{ node.onClick }}" style="cursor:pointer;padding-left:{{ node.indent }}px;">
+            <div class="tree-row-bg" style="display:flex;align-items:center;gap:5px;height:24px;border-radius:5px;padding:0 8px 0 2px;background:{{ node.bg }};">
+              <div style="width:12px;flex:none;text-align:center;color:#6b6c70;font-size:9px;visibility:{{ node.caretVisibility }};transform:rotate({{ node.caretRotation }}deg);">▶</div>
+              <sc-if value="{{ node.isGroup }}" hint-placeholder-val="{{ true }}">
+                <div style="width:10px;height:8px;flex:none;position:relative;">
+                  <div style="position:absolute;top:0;left:0;width:5px;height:2px;background:{{ node.iconColor }};border-radius:1px 1px 0 0;opacity:0.9;"></div>
+                  <div style="position:absolute;top:1.5px;left:0;width:10px;height:6.5px;background:{{ node.iconColor }};border-radius:1px;opacity:0.9;"></div>
+                </div>
+              </sc-if>
+              <sc-if value="{{ node.isScalar }}" hint-placeholder-val="{{ false }}">
+                <div style="width:7px;height:7px;flex:none;border-radius:50%;background:{{ node.iconColor }};opacity:0.9;"></div>
+              </sc-if>
+              <sc-if value="{{ node.isTable }}" hint-placeholder-val="{{ false }}">
+                <div style="width:9px;height:8px;flex:none;display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr;gap:1px;">
+                  <div style="background:{{ node.iconColor }};border-radius:0.5px;opacity:0.9;"></div>
+                  <div style="background:{{ node.iconColor }};border-radius:0.5px;opacity:0.9;"></div>
+                  <div style="background:{{ node.iconColor }};border-radius:0.5px;opacity:0.9;"></div>
+                  <div style="background:{{ node.iconColor }};border-radius:0.5px;opacity:0.9;"></div>
+                </div>
+              </sc-if>
+              <div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11.5px;color:{{ node.textColor }};font-weight:{{ node.fontWeight }};flex:1;">{{ node.label }}</div>
+            </div>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+
+    <!-- Splitter -->
+    <div onMouseDown="{{ onPanelDragStart }}" style="width:9px;flex:none;cursor:col-resize;background:transparent;display:flex;justify-content:center;position:relative;z-index:2;" style-hover="background:rgba(59,130,246,0.18);">
+      <div style="width:2px;height:100%;background:rgba(255,255,255,0.14);"></div>
+    </div>
+    </sc-if>
+
+    <!-- Collapsed sidebar rail -->
+    <sc-if value="{{ leftCollapsed }}" hint-placeholder-val="{{ false }}">
+    <div style="width:30px;flex:none;background:#1a1b1e;border-right:1px solid rgba(255,255,255,0.07);display:flex;flex-direction:column;align-items:center;padding-top:3px;">
+      <button onClick="{{ onToggleLeft }}" title="Show sidebar" style="width:24px;height:24px;border:none;background:transparent;color:#9a9ba0;font-size:13px;cursor:pointer;border-radius:5px;display:flex;align-items:center;justify-content:center;" style-hover="background:rgba(255,255,255,0.08);color:#e8e8ea;">▤</button>
+    </div>
+    </sc-if>
+
+    <!-- RIGHT: pane group -->
+    <div style="flex:1;display:flex;min-height:0;min-width:0;">
+      <sc-for list="{{ paneViews }}" as="pane" hint-placeholder-count="1">
+        <div style="display:contents;">
+        <div onMouseDown="{{ pane.onFocus }}" style="display:flex;flex-direction:column;min-height:0;min-width:0;background:#15161a;flex:{{ pane.flexCss }};">
+
+          <!-- Tab bar -->
+          <div style="flex:none;display:flex;align-items:stretch;background:#15161a;border-bottom:1px solid rgba(255,255,255,0.07);padding:0 8px;gap:2px;overflow-x:auto;">
+            <sc-for list="{{ pane.tabs }}" as="tab" hint-placeholder-count="2">
+              <div onClick="{{ tab.onSelect }}" style="display:flex;align-items:center;gap:7px;padding:0 12px;height:34px;flex:none;cursor:pointer;border-bottom:2px solid {{ tab.borderColor }};background:{{ tab.bg }};">
+                <div style="width:6px;height:6px;border-radius:50%;background:{{ tab.dotColor }};flex:none;"></div>
+                <div style="font-size:11.5px;font-weight:{{ tab.fontWeight }};color:{{ tab.color }};white-space:nowrap;">{{ tab.label }}</div>
+                <button onClick="{{ tab.onClose }}" style="border:none;background:transparent;color:#71727a;font-size:13px;line-height:1;cursor:pointer;padding:0 2px;">×</button>
+              </div>
+            </sc-for>
+            <button onClick="{{ pane.onAddTab }}" style="border:none;background:transparent;color:#71727a;font-size:15px;cursor:pointer;padding:0 10px;align-self:center;flex:none;">+</button>
+            <div style="flex:1;"></div>
+            <sc-if value="{{ pane.canSplit }}" hint-placeholder-val="{{ true }}">
+              <button onClick="{{ pane.onSplit }}" title="Split right" style="border:none;background:transparent;color:#71727a;font-size:13px;cursor:pointer;padding:0 10px;align-self:center;flex:none;">⊟</button>
+            </sc-if>
+            <sc-if value="{{ pane.canClosePane }}" hint-placeholder-val="{{ false }}">
+              <button onClick="{{ pane.onClosePane }}" title="Close group" style="border:none;background:transparent;color:#71727a;font-size:13px;cursor:pointer;padding:0 10px;align-self:center;flex:none;">✕</button>
+            </sc-if>
+          </div>
+
+          <!-- Toolbar -->
+          <div style="flex:none;padding:14px 18px;border-bottom:1px solid rgba(255,255,255,0.07);display:flex;flex-direction:column;gap:10px;">
+            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+
+              <div style="display:flex;flex-direction:column;gap:3px;">
+                <label style="font-size:9.5px;font-weight:700;letter-spacing:0.04em;color:#71727a;text-transform:uppercase;">Host</label>
+                <select value="{{ pane.selectedHostId }}" onChange="{{ pane.onHostSelect }}" style="height:28px;background:#1e1f22;border:1px solid rgba(255,255,255,0.12);border-radius:6px;color:#e8e8ea;font-size:11.5px;padding:0 8px;min-width:190px;outline:none;">
+                  <sc-for list="{{ hostProfiles }}" as="h" hint-placeholder-count="3">
+                    <option value="{{ h.id }}">{{ h.label }}</option>
+                  </sc-for>
+                  <option value="__new">+ New host…</option>
+                </select>
+              </div>
+
+              <div style="display:flex;flex-direction:column;gap:3px;">
+                <label style="font-size:9.5px;font-weight:700;letter-spacing:0.04em;color:#71727a;text-transform:uppercase;">Address</label>
+                <input value="{{ pane.hostAddr }}" onChange="{{ pane.onAddrChange }}" style="height:28px;width:140px;background:#1e1f22;border:1px solid rgba(255,255,255,0.12);border-radius:6px;color:#e8e8ea;font-size:11.5px;padding:0 8px;outline:none;font-family:ui-monospace,Menlo,monospace;">
+              </div>
+
+              <div style="display:flex;flex-direction:column;gap:3px;">
+                <label style="font-size:9.5px;font-weight:700;letter-spacing:0.04em;color:#71727a;text-transform:uppercase;">Port</label>
+                <input value="{{ pane.hostPort }}" onChange="{{ pane.onPortChange }}" style="height:28px;width:56px;background:#1e1f22;border:1px solid rgba(255,255,255,0.12);border-radius:6px;color:#e8e8ea;font-size:11.5px;padding:0 8px;outline:none;font-family:ui-monospace,Menlo,monospace;">
+              </div>
+
+              <div style="display:flex;flex-direction:column;gap:3px;">
+                <label style="font-size:9.5px;font-weight:700;letter-spacing:0.04em;color:#71727a;text-transform:uppercase;">Version</label>
+                <div style="display:flex;background:#1e1f22;border:1px solid rgba(255,255,255,0.12);border-radius:6px;height:28px;padding:2px;">
+                  <sc-for list="{{ pane.versionOptions }}" as="v" hint-placeholder-count="3">
+                    <button onClick="{{ v.onClick }}" style="border:none;background:{{ v.bg }};color:{{ v.color }};font-size:11px;font-weight:600;padding:0 10px;border-radius:4px;cursor:pointer;">{{ v.label }}</button>
+                  </sc-for>
+                </div>
+              </div>
+
+              <sc-if value="{{ pane.isV3 }}" hint-placeholder-val="{{ false }}">
+                <div style="display:flex;gap:10px;">
+                  <div style="display:flex;flex-direction:column;gap:3px;">
+                    <label style="font-size:9.5px;font-weight:700;letter-spacing:0.04em;color:#71727a;text-transform:uppercase;">Security User</label>
+                    <input value="{{ pane.v3User }}" onChange="{{ pane.onV3UserChange }}" style="height:28px;width:120px;background:#1e1f22;border:1px solid rgba(255,255,255,0.12);border-radius:6px;color:#e8e8ea;font-size:11.5px;padding:0 8px;outline:none;">
+                  </div>
+                  <div style="display:flex;flex-direction:column;gap:3px;">
+                    <label style="font-size:9.5px;font-weight:700;letter-spacing:0.04em;color:#71727a;text-transform:uppercase;">Auth</label>
+                    <input value="{{ pane.v3Auth }}" type="password" onChange="{{ pane.onV3AuthChange }}" style="height:28px;width:110px;background:#1e1f22;border:1px solid rgba(255,255,255,0.12);border-radius:6px;color:#e8e8ea;font-size:11.5px;padding:0 8px;outline:none;">
+                  </div>
+                  <div style="display:flex;flex-direction:column;gap:3px;">
+                    <label style="font-size:9.5px;font-weight:700;letter-spacing:0.04em;color:#71727a;text-transform:uppercase;">Priv</label>
+                    <input value="{{ pane.v3Priv }}" type="password" onChange="{{ pane.onV3PrivChange }}" style="height:28px;width:110px;background:#1e1f22;border:1px solid rgba(255,255,255,0.12);border-radius:6px;color:#e8e8ea;font-size:11.5px;padding:0 8px;outline:none;">
+                  </div>
+                </div>
+              </sc-if>
+
+              <sc-if value="{{ pane.isV3 }}" hint-placeholder-val="{{ false }}" invert="true">
+                <div style="display:flex;flex-direction:column;gap:3px;">
+                  <label style="font-size:9.5px;font-weight:700;letter-spacing:0.04em;color:#71727a;text-transform:uppercase;">Community</label>
+                  <input value="{{ pane.community }}" onChange="{{ pane.onCommunityChange }}" style="height:28px;width:110px;background:#1e1f22;border:1px solid rgba(255,255,255,0.12);border-radius:6px;color:#e8e8ea;font-size:11.5px;padding:0 8px;outline:none;font-family:ui-monospace,Menlo,monospace;">
+                </div>
+              </sc-if>
+
+              <div style="flex:1;"></div>
+
+              <button onClick="{{ pane.onFetch }}" style="height:32px;padding:0 18px;background:#2563eb;border:none;border-radius:7px;color:#fff;font-size:12px;font-weight:600;cursor:pointer;align-self:flex-end;">Fetch Table</button>
+            </div>
+          </div>
+
+          <!-- Table toolbar -->
+          <div style="flex:none;padding:10px 18px;display:flex;align-items:center;gap:14px;border-bottom:1px solid rgba(255,255,255,0.05);">
+            <div style="font-size:12.5px;font-weight:700;color:#e8e8ea;">{{ pane.selectedNodeLabel }}</div>
+            <div style="font-size:10.5px;color:#54565d;font-family:ui-monospace,Menlo,monospace;">{{ pane.selectedNodeOid }}</div>
+            <sc-if value="{{ pane.diffModeOn }}" hint-placeholder-val="{{ false }}">
+              <div style="display:flex;align-items:center;gap:10px;font-size:10.5px;color:#9a9ba0;">
+                <span style="display:flex;align-items:center;gap:4px;"><span style="width:7px;height:7px;border-radius:2px;background:#34d399;"></span>Added</span>
+                <span style="display:flex;align-items:center;gap:4px;"><span style="width:7px;height:7px;border-radius:2px;background:#f87171;"></span>Removed</span>
+                <span style="display:flex;align-items:center;gap:4px;"><span style="width:7px;height:7px;border-radius:2px;background:#eab308;"></span>Changed</span>
+              </div>
+            </sc-if>
+            <div style="flex:1;"></div>
+            <label style="display:flex;align-items:center;gap:7px;font-size:11px;color:#9a9ba0;cursor:pointer;" onClick="{{ pane.onToggleDiffMode }}">
+              <div style="width:30px;height:17px;border-radius:9px;background:{{ pane.diffTrackBg }};position:relative;transition:background 0.15s;">
+                <div style="width:13px;height:13px;border-radius:50%;background:#fff;position:absolute;top:2px;left:{{ pane.diffKnobLeft }}px;transition:left 0.15s;"></div>
+              </div>
+              Diff mode
+            </label>
+            <label style="display:flex;align-items:center;gap:7px;font-size:11px;color:#9a9ba0;cursor:pointer;" onClick="{{ pane.onToggleAutoRefresh }}">
+              <div style="width:30px;height:17px;border-radius:9px;background:{{ pane.autoRefreshTrackBg }};position:relative;transition:background 0.15s;">
+                <div style="width:13px;height:13px;border-radius:50%;background:#fff;position:absolute;top:2px;left:{{ pane.autoRefreshKnobLeft }}px;transition:left 0.15s;"></div>
+              </div>
+              Auto-refresh (10s)
+            </label>
+            <button style="height:26px;padding:0 12px;background:#1e1f22;border:1px solid rgba(255,255,255,0.12);border-radius:6px;color:#c8c9cd;font-size:11px;font-weight:600;cursor:pointer;">Export…</button>
+          </div>
+
+          <!-- Table -->
+          <div style="flex:1;overflow:auto;padding:0 18px 18px;">
+            <table style="width:max-content;border-collapse:collapse;font-size:11.5px;table-layout:fixed;">
+              <thead>
+                <tr>
+                  <sc-for list="{{ pane.columns }}" as="col" hint-placeholder-count="8">
+                    <th style="position:sticky;top:0;width:{{ col.width }}px;background:#1a1b1e;text-align:left;padding:8px 10px;border-bottom:1px solid rgba(255,255,255,0.1);border-right:1px solid rgba(255,255,255,0.1);white-space:nowrap;overflow:hidden;box-sizing:border-box;">
+                      <div class="th-btn" onClick="{{ col.onClick }}" style="display:flex;align-items:center;gap:5px;color:{{ col.color }};font-weight:700;font-size:10px;letter-spacing:0.03em;text-transform:uppercase;cursor:pointer;">
+                        {{ col.label }}
+                        <sc-if value="{{ col.showArrow }}" hint-placeholder-val="{{ false }}">
+                          <span style="font-size:9px;">{{ col.arrow }}</span>
+                        </sc-if>
+                      </div>
+                      <div onMouseDown="{{ col.onResizeStart }}" style="position:absolute;top:0;right:0;width:6px;height:100%;cursor:col-resize;"></div>
+                    </th>
+                  </sc-for>
+                </tr>
+              </thead>
+              <tbody>
+                <sc-for list="{{ pane.rows }}" as="row" hint-placeholder-count="6">
+                  <tr style="border-bottom:1px solid rgba(255,255,255,0.05);background:{{ row.rowBg }};opacity:{{ row.rowOpacity }};text-decoration:{{ row.rowTextDecoration }};">
+                    <td style="padding:8px 10px;font-family:ui-monospace,Menlo,monospace;color:#9a9ba0;overflow:hidden;text-overflow:ellipsis;border-right:1px solid rgba(255,255,255,0.06);">{{ row.ifIndex }}</td>
+                    <td style="padding:8px 10px;color:#e8e8ea;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border-right:1px solid rgba(255,255,255,0.06);background:{{ row.descrBg }};">{{ row.ifDescr }}</td>
+                    <td style="padding:8px 10px;color:#9a9ba0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border-right:1px solid rgba(255,255,255,0.06);background:{{ row.typeBg }};">{{ row.ifType }}</td>
+                    <td style="padding:8px 10px;color:#9a9ba0;overflow:hidden;text-overflow:ellipsis;border-right:1px solid rgba(255,255,255,0.06);background:{{ row.mtuBg }};">{{ row.ifMtu }}</td>
+                    <td style="padding:8px 10px;color:#9a9ba0;overflow:hidden;text-overflow:ellipsis;border-right:1px solid rgba(255,255,255,0.06);background:{{ row.speedBg }};">{{ row.ifSpeed }}</td>
+                    <td style="padding:8px 10px;color:#9a9ba0;font-family:ui-monospace,Menlo,monospace;overflow:hidden;text-overflow:ellipsis;border-right:1px solid rgba(255,255,255,0.06);background:{{ row.physBg }};">{{ row.ifPhysAddress }}</td>
+                    <td style="padding:8px 10px;border-right:1px solid rgba(255,255,255,0.06);background:{{ row.adminBg }};">
+                      <span style="display:inline-flex;align-items:center;gap:5px;font-weight:600;color:{{ row.adminColor }};">
+                        <span style="width:6px;height:6px;border-radius:50%;background:{{ row.adminColor }};"></span>{{ row.ifAdminStatus }}
+                      </span>
+                    </td>
+                    <td style="padding:8px 10px;background:{{ row.operBg }};">
+                      <span style="display:inline-flex;align-items:center;gap:5px;font-weight:600;color:{{ row.operColor }};">
+                        <span style="width:6px;height:6px;border-radius:50%;background:{{ row.operColor }};"></span>{{ row.ifOperStatus }}
+                      </span>
+                    </td>
+                  </tr>
+                </sc-for>
+              </tbody>
+            </table>
+          </div>
+
+          <!-- Status bar -->
+          <div style="flex:none;height:26px;background:#1a1b1e;border-top:1px solid rgba(255,255,255,0.07);display:flex;align-items:center;padding:0 18px;gap:16px;font-size:10.5px;color:#71727a;">
+            <div style="display:flex;align-items:center;gap:6px;">
+              <span style="width:6px;height:6px;border-radius:50%;background:#34d399;"></span>
+              Connected to {{ pane.hostAddr }}:{{ pane.hostPort }}
+            </div>
+            <div>{{ pane.rowCount }} rows</div>
+            <div>Last fetch: {{ pane.lastFetch }}</div>
+            <div style="flex:1;"></div>
+            <div>SNMPv{{ pane.versionLabel }}</div>
+          </div>
+        </div>
+        <sc-if value="{{ pane.showSplitterAfter }}" hint-placeholder-val="{{ false }}">
+          <div onMouseDown="{{ pane.onSplitDrag }}" style="width:9px;flex:none;cursor:col-resize;background:transparent;display:flex;justify-content:center;position:relative;z-index:2;" style-hover="background:rgba(59,130,246,0.18);">
+            <div style="width:2px;height:100%;background:rgba(255,255,255,0.14);"></div>
+          </div>
+        </sc-if>
+        </div>
+      </sc-for>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1440,&quot;height&quot;:900}}">
+class Component extends DCLogic {
+  defaultColWidths = { ifIndex: 60, ifDescr: 180, ifType: 150, ifMtu: 70, ifSpeed: 100, ifPhysAddress: 160, ifAdminStatus: 90, ifOperStatus: 90 };
+
+  ifRows = [
+    { ifIndex: 1, ifDescr: 'GigabitEthernet0/1', ifType: 'ethernetCsmacd(6)', ifMtu: 1500, ifSpeed: '1000 Mbps', ifPhysAddress: '00:1a:2b:3c:4d:01', ifAdminStatus: 'up', ifOperStatus: 'up' },
+    { ifIndex: 2, ifDescr: 'GigabitEthernet0/2', ifType: 'ethernetCsmacd(6)', ifMtu: 1500, ifSpeed: '1000 Mbps', ifPhysAddress: '00:1a:2b:3c:4d:02', ifAdminStatus: 'up', ifOperStatus: 'up' },
+    { ifIndex: 3, ifDescr: 'GigabitEthernet0/3', ifType: 'ethernetCsmacd(6)', ifMtu: 1500, ifSpeed: '1000 Mbps', ifPhysAddress: '00:1a:2b:3c:4d:03', ifAdminStatus: 'up', ifOperStatus: 'down' },
+    { ifIndex: 4, ifDescr: 'GigabitEthernet0/4', ifType: 'ethernetCsmacd(6)', ifMtu: 1500, ifSpeed: '1000 Mbps', ifPhysAddress: '00:1a:2b:3c:4d:04', ifAdminStatus: 'down', ifOperStatus: 'down' },
+    { ifIndex: 5, ifDescr: 'TenGigE0/0/1', ifType: 'ethernetCsmacd(6)', ifMtu: 9000, ifSpeed: '10000 Mbps', ifPhysAddress: '00:1a:2b:3c:4d:05', ifAdminStatus: 'up', ifOperStatus: 'up' },
+    { ifIndex: 6, ifDescr: 'Vlan1', ifType: 'l3ipvlan(136)', ifMtu: 1500, ifSpeed: '1000 Mbps', ifPhysAddress: '00:1a:2b:3c:4d:06', ifAdminStatus: 'up', ifOperStatus: 'up' },
+    { ifIndex: 7, ifDescr: 'Loopback0', ifType: 'softwareLoopback(24)', ifMtu: 1514, ifSpeed: '0 Mbps', ifPhysAddress: '00:00:00:00:00:00', ifAdminStatus: 'up', ifOperStatus: 'up' },
+  ];
+
+  hostProfiles = [
+    { id: 'h1', label: 'core-switch-01', addr: '10.0.1.5', port: '161', community: 'public', v3User: 'admin' },
+    { id: 'h2', label: 'edge-router-02', addr: '10.0.2.14', port: '161', community: 'public', v3User: 'netops' },
+    { id: 'h3', label: 'dist-switch-03', addr: '10.0.3.8', port: '1161', community: 'private', v3User: 'admin' },
+  ];
+
+  makeTab(id, hostId, opts) {
+    const h = this.hostProfiles.find(p => p.id === hostId) || this.hostProfiles[0];
+    return {
+      id, hostId: h.id, hostAddr: h.addr, hostPort: h.port,
+      version: 'v2c', community: h.community, v3User: h.v3User, v3Auth: '••••••••', v3Priv: '••••••••',
+      selectedNode: 'ifTable', sortCol: 'ifIndex', sortDir: 1,
+      colWidths: { ...this.defaultColWidths }, autoRefresh: true, lastFetch: '11:42:07 AM',
+      diffMode: false, workingRows: this.ifRows.map(r => ({ ...r })), rowMeta: {}, removedGhosts: [],
+      ...opts,
+    };
+  }
+
+  mutateRows(rows) {
+    const newRows = rows.map(r => ({ ...r }));
+    if (newRows.length && Math.random() < 0.7) {
+      const r = newRows[Math.floor(Math.random() * newRows.length)];
+      const field = ['ifOperStatus', 'ifAdminStatus', 'ifSpeed'][Math.floor(Math.random() * 3)];
+      if (field === 'ifOperStatus') r.ifOperStatus = r.ifOperStatus === 'up' ? 'down' : 'up';
+      else if (field === 'ifAdminStatus') r.ifAdminStatus = r.ifAdminStatus === 'up' ? 'down' : 'up';
+      else r.ifSpeed = r.ifSpeed === '1000 Mbps' ? '100 Mbps' : '1000 Mbps';
+    }
+    if (newRows.length > 4 && Math.random() < 0.35) {
+      newRows.splice(Math.floor(Math.random() * newRows.length), 1);
+    }
+    if (Math.random() < 0.35) {
+      const maxIdx = Math.max(...newRows.map(r => r.ifIndex), 0);
+      newRows.push({ ifIndex: maxIdx + 1, ifDescr: 'GigabitEthernet0/' + (maxIdx + 1), ifType: 'ethernetCsmacd(6)', ifMtu: 1500, ifSpeed: '1000 Mbps', ifPhysAddress: '00:1a:2b:3c:4d:' + String(maxIdx + 1).padStart(2, '0'), ifAdminStatus: 'up', ifOperStatus: 'up' });
+    }
+    return newRows;
+  }
+
+  computeRowDiff(oldRows, newRows) {
+    const oldMap = new Map(oldRows.map(r => [r.ifIndex, r]));
+    const newMap = new Map(newRows.map(r => [r.ifIndex, r]));
+    const meta = {};
+    const fieldKeys = ['ifDescr', 'ifType', 'ifMtu', 'ifSpeed', 'ifPhysAddress', 'ifAdminStatus', 'ifOperStatus'];
+    for (const r of newRows) {
+      const old = oldMap.get(r.ifIndex);
+      if (!old) meta[r.ifIndex] = { status: 'added' };
+      else {
+        const fields = fieldKeys.filter(f => old[f] !== r[f]);
+        if (fields.length) meta[r.ifIndex] = { status: 'changed', fields };
+      }
+    }
+    const removed = oldRows.filter(r => !newMap.has(r.ifIndex)).map(r => ({ ...r }));
+    removed.forEach(r => { meta[r.ifIndex] = { status: 'removed' }; });
+    return { meta, removed };
+  }
+
+  state = {
+    filterText: '',
+    expanded: { root: true, interfaces: true, ip: false, tcp: false, udp: false, system: false, snmp: false, enterprises: false },
+    leftWidth: 330,
+    leftCollapsed: false,
+    panes: [
+      { id: 'p1', width: 620, activeTabId: 't1', tabs: [ this.makeTab('t1', 'h1') ] },
+      { id: 'p2', width: null, activeTabId: 't2', tabs: [ this.makeTab('t2', 'h2', { autoRefresh: false, lastFetch: '11:38:52 AM' }) ] },
+    ],
+    activePaneId: 'p1',
+  };
+
+  getPane(id) { return this.state.panes.find(p => p.id === id); }
+  getActivePane() { return this.getPane(this.state.activePaneId) || this.state.panes[0]; }
+  getPaneActiveTab(pane) { return pane.tabs.find(t => t.id === pane.activeTabId) || pane.tabs[0]; }
+  getActiveTab() { return this.getPaneActiveTab(this.getActivePane()); }
+
+  updateActiveTabInPane(paneId, patch) {
+    this.setState(s => ({ panes: s.panes.map(p => {
+      if (p.id !== paneId) return p;
+      return { ...p, tabs: p.tabs.map(t => t.id === p.activeTabId ? { ...t, ...(typeof patch === 'function' ? patch(t) : patch) } : t) };
+    }) }));
+  }
+  updateActiveTab(patch) { this.updateActiveTabInPane(this.state.activePaneId, patch); }
+
+  addTabToPane(paneId) {
+    const id = 'tab' + Date.now();
+    this.setState(s => ({ panes: s.panes.map(p => p.id === paneId ? { ...p, tabs: [...p.tabs, this.makeTab(id, 'h1')], activeTabId: id } : p) }));
+  }
+  closeTabInPane(paneId, tabId) {
+    this.setState(s => {
+      const pane = s.panes.find(p => p.id === paneId);
+      if (!pane) return {};
+      if (pane.tabs.length <= 1) {
+        if (s.panes.length <= 1) return {};
+        const panes = s.panes.filter(p => p.id !== paneId);
+        if (panes.length === 1) panes[0] = { ...panes[0], width: null };
+        const activePaneId = s.activePaneId === paneId ? panes[panes.length - 1].id : s.activePaneId;
+        return { panes, activePaneId };
+      }
+      const tabs = pane.tabs.filter(t => t.id !== tabId);
+      const activeTabId = pane.activeTabId === tabId ? tabs[tabs.length - 1].id : pane.activeTabId;
+      return { panes: s.panes.map(p => p.id === paneId ? { ...p, tabs, activeTabId } : p) };
+    });
+  }
+  splitPane(paneId) {
+    this.setState(s => {
+      if (s.panes.length >= 2) return {};
+      const pane = s.panes.find(p => p.id === paneId);
+      const at = this.getPaneActiveTab(pane);
+      const newTab = { ...at, id: 'tab' + Date.now() };
+      const newPane = { id: 'pane' + Date.now(), width: null, tabs: [newTab], activeTabId: newTab.id };
+      const panes = s.panes.map(p => p.id === paneId ? { ...p, width: 620 } : p).concat(newPane);
+      return { panes, activePaneId: newPane.id };
+    });
+  }
+  closePane(paneId) {
+    this.setState(s => {
+      if (s.panes.length <= 1) return {};
+      const panes = s.panes.filter(p => p.id !== paneId);
+      if (panes.length === 1) panes[0] = { ...panes[0], width: null };
+      const activePaneId = s.activePaneId === paneId ? panes[panes.length - 1].id : s.activePaneId;
+      return { panes, activePaneId };
+    });
+  }
+
+  startDrag(e, onDelta) {
+    e.preventDefault();
+    e.stopPropagation();
+    const startX = e.clientX;
+    const onMove = ev => onDelta(ev.clientX - startX);
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  }
+
+  tree = [
+    { id: 'mib2', label: 'mib-2', oid: '1.3.6.1.2.1', type: 'group', depth: 0, children: [
+      { id: 'system', label: 'system', oid: '1', type: 'group', depth: 1, children: [
+        { id: 'sysDescr', label: 'sysDescr', oid: '1', type: 'scalar', depth: 2 },
+        { id: 'sysUpTime', label: 'sysUpTime', oid: '3', type: 'scalar', depth: 2 },
+      ]},
+      { id: 'interfaces', label: 'interfaces', oid: '2', type: 'group', depth: 1, children: [
+        { id: 'ifNumber', label: 'ifNumber', oid: '1', type: 'scalar', depth: 2 },
+        { id: 'ifTable', label: 'ifTable', oid: '2', type: 'table', depth: 2 },
+      ]},
+      { id: 'ip', label: 'ip', oid: '4', type: 'group', depth: 1, children: [
+        { id: 'ipForwarding', label: 'ipForwarding', oid: '1', type: 'scalar', depth: 2 },
+        { id: 'ipAddrTable', label: 'ipAddrTable', oid: '20', type: 'table', depth: 2 },
+      ]},
+      { id: 'tcp', label: 'tcp', oid: '6', type: 'group', depth: 1, children: [
+        { id: 'tcpConnTable', label: 'tcpConnTable', oid: '13', type: 'table', depth: 2 },
+      ]},
+      { id: 'udp', label: 'udp', oid: '7', type: 'group', depth: 1, children: [
+        { id: 'udpTable', label: 'udpTable', oid: '5', type: 'table', depth: 2 },
+      ]},
+      { id: 'snmp', label: 'snmp', oid: '11', type: 'group', depth: 1, children: [
+        { id: 'snmpInPkts', label: 'snmpInPkts', oid: '1', type: 'scalar', depth: 2 },
+      ]},
+    ]},
+    { id: 'enterprises', label: 'enterprises', oid: '1.3.6.1.4.1', type: 'group', depth: 0, children: [
+      { id: 'vendorMib', label: 'acmeSwitch (custom MIB)', oid: '9999', type: 'group', depth: 1, children: [
+        { id: 'acmeTempTable', label: 'acmeTempTable', oid: '1', type: 'table', depth: 2 },
+      ]},
+    ]},
+  ];
+
+  cols = [
+    { key: 'ifIndex', label: 'Index' },
+    { key: 'ifDescr', label: 'ifDescr' },
+    { key: 'ifType', label: 'ifType' },
+    { key: 'ifMtu', label: 'ifMtu' },
+    { key: 'ifSpeed', label: 'ifSpeed' },
+    { key: 'ifPhysAddress', label: 'ifPhysAddress' },
+    { key: 'ifAdminStatus', label: 'Admin' },
+    { key: 'ifOperStatus', label: 'Oper' },
+  ];
+
+  toggleExpand(id) {
+    this.setState(s => ({ expanded: { ...s.expanded, [id]: !s.expanded[id] } }));
+  }
+  selectNode(node) {
+    this.updateActiveTabInPane(this.state.activePaneId, { selectedNode: node.id });
+    if (node.children) this.toggleExpand(node.id);
+  }
+
+  flatten(nodes, out, expanded) {
+    for (const n of nodes) {
+      out.push(n);
+      if (n.children && expanded[n.id]) this.flatten(n.children, out, expanded);
+    }
+    return out;
+  }
+
+  findNode(nodes, id) {
+    for (const n of nodes) {
+      if (n.id === id) return n;
+      if (n.children) { const f = this.findNode(n.children, id); if (f) return f; }
+    }
+    return null;
+  }
+
+  renderVals() {
+    const s = this.state;
+    const at = this.getActiveTab();
+    const filter = s.filterText.trim().toLowerCase();
+    const flat = this.flatten(this.tree, [], s.expanded);
+    const visible = filter ? flat.filter(n => n.label.toLowerCase().includes(filter)) : flat;
+
+    const iconColors = { group: '#8a8b91', scalar: '#3b82f6', table: '#3b82f6' };
+    const flatNodes = visible.map(n => {
+      const selected = n.id === at.selectedNode;
+      return {
+        indent: n.depth * 16 + 2,
+        onClick: () => this.selectNode(n),
+        caretVisibility: n.children ? 'visible' : 'hidden',
+        caretRotation: n.children && s.expanded[n.id] ? 90 : 0,
+        isGroup: n.type === 'group',
+        isScalar: n.type === 'scalar',
+        isTable: n.type === 'table',
+        iconColor: n.type === 'table' ? '#3b82f6' : (n.type === 'scalar' ? '#6b6c70' : '#8a8b91'),
+        label: n.label,
+        textColor: selected ? '#ffffff' : (n.type === 'group' ? '#c8c9cd' : '#a9aab0'),
+        fontWeight: selected ? 600 : (n.type === 'group' ? 600 : 400),
+        bg: selected ? 'rgba(59,130,246,0.22)' : 'transparent',
+      };
+    });
+
+    const selNode = this.findNode(this.tree, at.selectedNode);
+    const fullOid = selNode ? (selNode.depth === 0 ? selNode.oid : '1.3.6.1.2.1' + '.' + this.pathOid(at.selectedNode)) : '';
+
+    const paneViews = s.panes.map((pane, idx) => {
+      const isLast = idx === s.panes.length - 1;
+      const pat = this.getPaneActiveTab(pane);
+
+      const versionOptions = ['v1', 'v2c', 'v3'].map(v => ({
+        label: v,
+        onClick: () => this.updateActiveTabInPane(pane.id, { version: v }),
+        bg: pat.version === v ? '#2563eb' : 'transparent',
+        color: pat.version === v ? '#fff' : '#9a9ba0',
+      }));
+
+      let rows = pat.workingRows.concat(pat.removedGhosts || []);
+      rows.sort((a, b) => {
+        const av = a[pat.sortCol], bv = b[pat.sortCol];
+        const cmp = typeof av === 'number' ? av - bv : String(av).localeCompare(String(bv));
+        return cmp * pat.sortDir;
+      });
+      rows = rows.map(r => {
+        const meta = (pat.rowMeta && pat.rowMeta[r.ifIndex]) || {};
+        const fields = meta.fields || [];
+        const cellBg = f => fields.includes(f) ? 'rgba(234,179,8,0.22)' : 'transparent';
+        return {
+          ...r,
+          adminColor: r.ifAdminStatus === 'up' ? '#34d399' : '#71727a',
+          operColor: r.ifOperStatus === 'up' ? '#34d399' : '#f87171',
+          rowBg: meta.status === 'added' ? 'rgba(52,211,153,0.10)' : meta.status === 'removed' ? 'rgba(248,113,113,0.10)' : 'transparent',
+          rowOpacity: meta.status === 'removed' ? 0.55 : 1,
+          rowTextDecoration: meta.status === 'removed' ? 'line-through' : 'none',
+          descrBg: cellBg('ifDescr'), typeBg: cellBg('ifType'), mtuBg: cellBg('ifMtu'), speedBg: cellBg('ifSpeed'), physBg: cellBg('ifPhysAddress'), adminBg: cellBg('ifAdminStatus'), operBg: cellBg('ifOperStatus'),
+        };
+      });
+
+      const columns = this.cols.map(c => {
+        const startWidth = pat.colWidths[c.key];
+        return {
+          label: c.label,
+          width: startWidth,
+          onClick: () => this.updateActiveTabInPane(pane.id, t => ({ sortCol: c.key, sortDir: t.sortCol === c.key ? -t.sortDir : 1 })),
+          color: pat.sortCol === c.key ? '#e8e8ea' : '#71727a',
+          showArrow: pat.sortCol === c.key,
+          arrow: pat.sortDir === 1 ? '▲' : '▼',
+          onResizeStart: e => this.startDrag(e, dx => this.updateActiveTabInPane(pane.id, t => ({ colWidths: { ...t.colWidths, [c.key]: Math.max(50, startWidth + dx) } }))),
+        };
+      });
+
+      const tabs = pane.tabs.map(t => {
+        const h = this.hostProfiles.find(p => p.id === t.hostId);
+        const active = t.id === pane.activeTabId;
+        return {
+          label: (h ? h.label : t.hostId) + ' · ' + t.selectedNode,
+          onSelect: () => this.setState(st => ({ activePaneId: pane.id, panes: st.panes.map(p => p.id === pane.id ? { ...p, activeTabId: t.id } : p) })),
+          onClose: e => { e.stopPropagation(); this.closeTabInPane(pane.id, t.id); },
+          borderColor: active ? '#2563eb' : 'transparent',
+          bg: active ? '#1a1b1e' : 'transparent',
+          color: active ? '#e8e8ea' : '#9a9ba0',
+          fontWeight: active ? 600 : 400,
+          dotColor: '#34d399',
+        };
+      });
+
+      const paneSelNode = this.findNode(this.tree, pat.selectedNode);
+      const paneFullOid = paneSelNode ? (paneSelNode.depth === 0 ? paneSelNode.oid : '1.3.6.1.2.1' + '.' + this.pathOid(pat.selectedNode)) : '';
+
+      return {
+        onFocus: () => this.setState({ activePaneId: pane.id }),
+        flexCss: isLast ? '1 1 0%' : `0 0 ${pane.width}px`,
+        isLast,
+        showSplitterAfter: !isLast,
+        canSplit: s.panes.length < 2,
+        onSplit: () => this.splitPane(pane.id),
+        canClosePane: s.panes.length > 1,
+        onClosePane: () => this.closePane(pane.id),
+        onSplitDrag: e => { const startWidth = pane.width || 620; this.startDrag(e, dx => this.setState(st => ({ panes: st.panes.map(p => p.id === pane.id ? { ...p, width: Math.max(340, startWidth + dx) } : p) }))); },
+        tabs,
+        onAddTab: () => this.addTabToPane(pane.id),
+        selectedNodeLabel: paneSelNode ? paneSelNode.label : '',
+        selectedNodeOid: paneFullOid,
+        selectedHostId: pat.hostId,
+        onHostSelect: e => {
+          const id = e.target.value;
+          const h = this.hostProfiles.find(p => p.id === id);
+          if (h) this.updateActiveTabInPane(pane.id, { hostId: id, hostAddr: h.addr, hostPort: h.port, community: h.community, v3User: h.v3User });
+          else this.updateActiveTabInPane(pane.id, { hostId: id });
+        },
+        hostAddr: pat.hostAddr,
+        onAddrChange: e => this.updateActiveTabInPane(pane.id, { hostAddr: e.target.value }),
+        hostPort: pat.hostPort,
+        onPortChange: e => this.updateActiveTabInPane(pane.id, { hostPort: e.target.value }),
+        versionOptions,
+        isV3: pat.version === 'v3',
+        community: pat.community,
+        onCommunityChange: e => this.updateActiveTabInPane(pane.id, { community: e.target.value }),
+        v3User: pat.v3User,
+        onV3UserChange: e => this.updateActiveTabInPane(pane.id, { v3User: e.target.value }),
+        v3Auth: pat.v3Auth,
+        onV3AuthChange: e => this.updateActiveTabInPane(pane.id, { v3Auth: e.target.value }),
+        v3Priv: pat.v3Priv,
+        onV3PrivChange: e => this.updateActiveTabInPane(pane.id, { v3Priv: e.target.value }),
+        onFetch: () => this.updateActiveTabInPane(pane.id, t => {
+          if (!t.diffMode) return { workingRows: this.ifRows.map(r => ({ ...r })), rowMeta: {}, removedGhosts: [], lastFetch: new Date().toLocaleTimeString() };
+          const newRows = this.mutateRows(t.workingRows);
+          const { meta, removed } = this.computeRowDiff(t.workingRows, newRows);
+          return { workingRows: newRows, rowMeta: meta, removedGhosts: removed, lastFetch: new Date().toLocaleTimeString() };
+        }),
+        columns,
+        rows,
+        rowCount: rows.length,
+        lastFetch: pat.lastFetch,
+        versionLabel: pat.version.replace('v', ''),
+        autoRefreshTrackBg: pat.autoRefresh ? '#2563eb' : '#3a3b3f',
+        autoRefreshKnobLeft: pat.autoRefresh ? 15 : 2,
+        onToggleAutoRefresh: () => this.updateActiveTabInPane(pane.id, t => ({ autoRefresh: !t.autoRefresh })),
+        diffModeOn: pat.diffMode,
+        diffTrackBg: pat.diffMode ? '#2563eb' : '#3a3b3f',
+        diffKnobLeft: pat.diffMode ? 15 : 2,
+        onToggleDiffMode: () => this.updateActiveTabInPane(pane.id, t => ({ diffMode: !t.diffMode })),
+      };
+    });
+
+    return {
+      mibDirs: ['/usr/share/snmp/mibs', '/opt/company/mibs/vendor', '~/Library/MIBs'],
+      hostProfiles: this.hostProfiles,
+      filterText: s.filterText,
+      onFilterChange: e => this.setState({ filterText: e.target.value }),
+      flatNodes,
+      leftWidth: s.leftWidth,
+      leftVisible: !s.leftCollapsed,
+      leftCollapsed: s.leftCollapsed,
+      onToggleLeft: () => this.setState(st => ({ leftCollapsed: !st.leftCollapsed })),
+      onPanelDragStart: e => { const startWidth = s.leftWidth; this.startDrag(e, dx => this.setState({ leftWidth: Math.min(520, Math.max(220, startWidth + dx)) })); },
+      paneViews,
+    };
+  }
+
+  pathOid(id) {
+    const walk = (nodes, prefix) => {
+      for (const n of nodes) {
+        const p = prefix ? prefix + '.' + n.oid : n.oid;
+        if (n.id === id) return p;
+        if (n.children) { const f = walk(n.children, p); if (f) return f; }
+      }
+      return null;
+    };
+    return walk(this.tree[0].children, '') || '';
+  }
+}
+</script>
+</body>
+</html>
