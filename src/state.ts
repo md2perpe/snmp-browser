@@ -36,7 +36,10 @@ export class Store {
   }
 
   async init() {
-    this.state.mibDirs = await invoke<string[]>("list_mib_dirs");
+    const [mibDirs, hostProfiles] = await Promise.all([invoke<string[]>("list_mib_dirs"), invoke<HostProfile[]>("list_host_profiles")]);
+    this.state.mibDirs = mibDirs;
+    this.hostProfiles = hostProfiles;
+    this.notify();
     await this.loadMibTree();
   }
 
