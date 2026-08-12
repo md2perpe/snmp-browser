@@ -388,6 +388,18 @@ fn dotted(path: &[u32]) -> String {
     path.iter().map(u32::to_string).collect::<Vec<_>>().join(".")
 }
 
+/// A table's real children sit one level down, under a hidden "entry" object
+/// (SMI convention: table -> entry -> columns) - collect columns from every
+/// entry declared under this table, skipping the entry itself.
+fn table_columns<'a>(table_name: &str, children_of: &HashMap<String, Vec<&'a RawSymbol>>) -> Vec<&'a RawSymbol> {
+    let mut columns: Vec<&RawSymbol> = Vec::new();
+    for entry in children_of.get(table_name).cloned().unwrap_or_default() {
+        columns.extend(children_of.get(&entry.name).cloned().unwrap_or_default());
+    }
+    columns.sort_by(|a, b| a.name.cmp(&b.name));
+    columns
+}
+
 fn build_tree(raw: &[RawSymbol], resolved: &HashMap<String, Vec<u32>>) -> Vec<MibTreeNode> {
     let by_name: HashMap<&str, &RawSymbol> = raw.iter().map(|s| (s.name.as_str(), s)).collect();
     let mut children_of: HashMap<String, Vec<&RawSymbol>> = HashMap::new();
@@ -410,9 +422,8 @@ fn build_tree(raw: &[RawSymbol], resolved: &HashMap<String, Vec<u32>>) -> Vec<Mi
             RawKind::Group => NodeKind::Group,
             RawKind::Scalar | RawKind::Other => NodeKind::Scalar,
         };
-        // Table columns live under a hidden "entry" object; browsing stops at the table itself.
         let children = if s.kind == RawKind::Table {
-            Vec::new()
+            table_columns(&s.name, children_of).iter().map(|c| build_node(c, children_of, resolved)).collect()
         } else {
             let mut kids: Vec<&RawSymbol> = children_of.get(&s.name).cloned().unwrap_or_default();
             kids.sort_by(|a, b| a.name.cmp(&b.name));
@@ -470,15 +481,7 @@ fn build_tables_tree(raw: &[RawSymbol], resolved: &HashMap<String, Vec<u32>>) ->
     tables
         .into_iter()
         .map(|t| {
-            // Columns sit one level below the table, under a hidden "entry"
-            // object (SMI convention: table -> entry -> columns) - collect
-            // columns from every entry declared under this table.
-            let mut columns: Vec<&RawSymbol> = Vec::new();
-            for entry in children_of.get(&t.name).cloned().unwrap_or_default() {
-                columns.extend(children_of.get(&entry.name).cloned().unwrap_or_default());
-            }
-            columns.sort_by(|a, b| a.name.cmp(&b.name));
-
+            let columns = table_columns(&t.name, &children_of);
             let path = resolved.get(&t.name);
             MibTreeNode {
                 id: t.name.clone(),
@@ -637,7 +640,7 @@ END
     }
 
     #[test]
-    fn table_appears_as_a_leaf_with_no_column_children_in_the_tree() {
+    fn table_columns_appear_as_children_of_the_table_skipping_the_hidden_entry_level() {
         let dir = write_fixture(IF_TABLE_MIB);
         let result = parse_directories(&[dir.path().to_string_lossy().to_string()]);
 
@@ -646,7 +649,11 @@ END
         let interfaces = mib2.children.iter().find(|n| n.id == "interfaces").expect("interfaces group");
         let if_table = interfaces.children.iter().find(|n| n.id == "ifTable").expect("ifTable node");
         assert_eq!(if_table.kind, NodeKind::Table);
-        assert!(if_table.children.is_empty(), "table columns/entry should not appear as tree nodes");
+
+        let names: Vec<&str> = if_table.children.iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(names, vec!["ifDescr", "ifIndex", "ifOperStatus"], "columns nest directly under the table, entry level skipped");
+        assert!(if_table.children.iter().all(|c| c.kind == NodeKind::Scalar && c.children.is_empty()));
+        assert!(interfaces.children.iter().all(|c| c.id != "ifEntry"), "hidden entry object itself should not appear in the tree");
     }
 
     #[test]
