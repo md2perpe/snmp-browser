@@ -1,5 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
-import { open } from "@tauri-apps/plugin-dialog";
+import { invoke, pickDirectory } from "./api";
 import { DEFAULT_COL_WIDTH, mockHostProfiles } from "./mockData";
 import type { AppState, HostProfile, MibNode, PaneState, ParseResult, Row, RowMetaEntry, SnmpVersion, TabState } from "./types";
 
@@ -221,8 +220,8 @@ export class Store {
   }
 
   async addMibDir() {
-    const selected = await open({ directory: true, multiple: false });
-    if (!selected || Array.isArray(selected)) return;
+    const selected = await pickDirectory();
+    if (!selected) return;
     this.state.mibDirs = await invoke<string[]>("add_mib_dir", { path: selected });
     this.notify();
     await this.loadMibTree();

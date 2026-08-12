@@ -1,6 +1,6 @@
-mod mib;
-mod settings;
-mod snmp;
+pub mod mib;
+pub mod settings;
+pub mod snmp;
 
 use settings::{HostProfile, Settings};
 use std::path::PathBuf;
