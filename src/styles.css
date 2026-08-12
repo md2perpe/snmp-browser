@@ -214,6 +214,44 @@ button {
 .mib-dir-warning:hover {
   text-decoration: underline;
 }
+.mib-dir-draft-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 6px;
+}
+.mib-dir-draft-input {
+  flex: 1;
+  min-width: 0;
+  height: 22px;
+  background: var(--bg-deep);
+  border: 1px solid var(--border-mid);
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 11px;
+  padding: 0 6px;
+  outline: none;
+}
+.mib-dir-draft-confirm,
+.mib-dir-draft-cancel {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-chip);
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+}
+.mib-dir-draft-confirm:hover {
+  color: var(--green, #4caf50);
+}
+.mib-dir-draft-cancel:hover {
+  color: var(--red);
+}
 
 /* ---------- Modal ---------- */
 
