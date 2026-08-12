@@ -126,14 +126,7 @@ function renderSidebar(store: Store): HTMLElement {
       el("div", { class: "mib-dir-list" }, dirRows),
       draftRow,
     ]),
-    el("div", { class: "filter-box" }, [
-      el("input", {
-        class: "filter-input",
-        placeholder: "Filter OIDs…",
-        value: store.state.filterText,
-        "data-focus-key": "filter",
-        oninput: (e: Event) => store.setFilterText((e.target as HTMLInputElement).value),
-      }),
+    el("div", { class: "tree-mode-box" }, [
       el(
         "div",
         { class: "tree-mode-toggle" },

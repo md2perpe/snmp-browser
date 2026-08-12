@@ -330,24 +330,10 @@ button {
   font-size: 10px;
 }
 
-.filter-box {
+.tree-mode-box {
   flex: none;
   padding: 10px 14px;
   border-bottom: 1px solid var(--border-soft);
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.filter-input {
-  width: 100%;
-  height: 26px;
-  background: var(--bg-deep);
-  border: 1px solid var(--border-mid);
-  border-radius: 6px;
-  color: var(--text-primary);
-  font-size: 11.5px;
-  padding: 0 9px;
-  outline: none;
 }
 
 .tree {

@@ -79,7 +79,6 @@ export interface PaneState {
 }
 
 export interface AppState {
-  filterText: string;
   expanded: Record<string, boolean>;
   /** When true, the sidebar shows only tables (as roots) with their columns as children, instead of the full group hierarchy. */
   tablesOnlyMode: boolean;
