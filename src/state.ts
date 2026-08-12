@@ -25,6 +25,7 @@ export class Store {
       expanded: {},
       mibDirs: [],
       parseErrors: [],
+      parseErrorsOpen: false,
       leftWidth: 330,
       leftCollapsed: false,
       panes: [
@@ -191,6 +192,11 @@ export class Store {
     this.notify();
   }
 
+  toggleParseErrors() {
+    this.state.parseErrorsOpen = !this.state.parseErrorsOpen;
+    this.notify();
+  }
+
   setLeftWidth(width: number) {
     this.state.leftWidth = Math.min(520, Math.max(220, width));
     this.notify();
@@ -210,6 +216,7 @@ export class Store {
     const result = await invoke<ParseResult>("get_mib_tree");
     this.tree = result.tree;
     this.state.parseErrors = result.errors;
+    if (result.errors.length === 0) this.state.parseErrorsOpen = false;
     this.notify();
   }
 

@@ -10,9 +10,14 @@ export interface MibNode {
   children?: MibNode[];
 }
 
+export interface FileErrors {
+  file: string;
+  errors: string[];
+}
+
 export interface ParseResult {
   tree: MibNode[];
-  errors: string[];
+  errors: FileErrors[];
 }
 
 export interface HostProfile {
@@ -75,7 +80,8 @@ export interface AppState {
   filterText: string;
   expanded: Record<string, boolean>;
   mibDirs: string[];
-  parseErrors: string[];
+  parseErrors: FileErrors[];
+  parseErrorsOpen: boolean;
   leftWidth: number;
   leftCollapsed: boolean;
   panes: PaneState[];
