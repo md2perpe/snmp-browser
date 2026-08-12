@@ -12,6 +12,7 @@ export class Store {
   state: AppState;
   hostProfiles: HostProfile[] = mockHostProfiles;
   tree: MibNode[] = [];
+  tablesTree: MibNode[] = [];
 
   private listeners: Array<() => void> = [];
   private autoRefreshTimers = new Map<string, ReturnType<typeof setInterval>>();
@@ -22,6 +23,7 @@ export class Store {
     this.state = {
       filterText: "",
       expanded: {},
+      tablesOnlyMode: false,
       mibDirs: [],
       mibDirDraft: null,
       parseErrors: [],
@@ -207,6 +209,11 @@ export class Store {
     this.notify();
   }
 
+  setTablesOnlyMode(value: boolean) {
+    this.state.tablesOnlyMode = value;
+    this.notify();
+  }
+
   selectNode(paneId: string, node: MibNode) {
     this.updateActiveTabInPane(paneId, { selectedNode: node.id });
     if (node.children) this.toggleExpand(node.id);
@@ -215,6 +222,7 @@ export class Store {
   async loadMibTree() {
     const result = await invoke<ParseResult>("get_mib_tree");
     this.tree = result.tree;
+    this.tablesTree = result.tablesTree;
     this.state.parseErrors = result.errors;
     if (result.errors.length === 0) this.state.parseErrorsOpen = false;
     this.notify();
@@ -263,13 +271,19 @@ export class Store {
     await this.loadMibTree();
   }
 
+  /** The tree currently shown in the sidebar: the full group hierarchy, or the flat tables-only view. */
+  activeTree(): MibNode[] {
+    return this.state.tablesOnlyMode ? this.tablesTree : this.tree;
+  }
+
   getVisibleNodes(): { node: MibNode; depth: number }[] {
+    const tree = this.activeTree();
     const filter = this.state.filterText.trim().toLowerCase();
-    if (!filter) return this.flatten(this.tree, 0, [], this.state.expanded);
+    if (!filter) return this.flatten(tree, 0, [], this.state.expanded);
     // A filter searches the whole tree regardless of collapse state - a
     // search box that only finds nodes you'd already expanded manually
     // isn't useful, since everything starts collapsed.
-    return this.flattenAll(this.tree, 0, []).filter(({ node }) => node.label.toLowerCase().includes(filter));
+    return this.flattenAll(tree, 0, []).filter(({ node }) => node.label.toLowerCase().includes(filter));
   }
 
   private flatten(nodes: MibNode[], depth: number, out: { node: MibNode; depth: number }[], expanded: Record<string, boolean>) {
@@ -403,7 +417,7 @@ export class Store {
   }
 
   private async runFetch(tab: TabState) {
-    const node = this.findNode(this.tree, tab.selectedNode);
+    const node = this.findNode(this.activeTree(), tab.selectedNode);
     if (!this.canFetch(node)) {
       tab.fetchError = node ? `'${node.label}' can't be fetched` : "Select an OID first";
       return;
