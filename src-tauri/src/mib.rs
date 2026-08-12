@@ -422,8 +422,19 @@ fn build_tree(raw: &[RawSymbol], resolved: &HashMap<String, Vec<u32>>) -> Vec<Mi
         }
     }
 
-    roots.sort_by(|a, b| a.name.cmp(&b.name));
-    roots.iter().map(|s| build_node(s, &children_of, resolved)).collect()
+    // Keep only roots that actually resolve to somewhere under `iso` (arc 1) -
+    // the other ASN.1 primitives (ccitt/itu-t, joint-iso-*) never appear in
+    // real MIB data, and anything left unresolved can't be confirmed to
+    // belong under iso at all. Nest them under a single synthetic `iso` node
+    // so it's the tree's sole root, matching how OID trees are conventionally
+    // browsed - unresolved *descendants* further down are unaffected by this
+    // and still show up greyed out, as before.
+    let mut iso_roots: Vec<&RawSymbol> =
+        roots.into_iter().filter(|s| matches!(resolved.get(&s.name), Some(path) if path.first() == Some(&1))).collect();
+    iso_roots.sort_by(|a, b| a.name.cmp(&b.name));
+    let children = iso_roots.iter().map(|s| build_node(s, &children_of, resolved)).collect();
+
+    vec![MibTreeNode { id: "iso".to_string(), label: "iso".to_string(), oid: "1".to_string(), resolved: true, kind: NodeKind::Group, children }]
 }
 
 fn build_tables(raw: &[RawSymbol], sequence_types: &HashMap<String, Vec<String>>, resolved: &HashMap<String, Vec<u32>>) -> HashMap<String, TableInfo> {
@@ -575,11 +586,32 @@ END
         let dir = write_fixture(IF_TABLE_MIB);
         let result = parse_directories(&[dir.path().to_string_lossy().to_string()]);
 
-        let mib2 = result.tree.iter().find(|n| n.id == "mib-2").expect("mib-2 root");
+        let iso = &result.tree[0];
+        let mib2 = iso.children.iter().find(|n| n.id == "mib-2").expect("mib-2 under iso");
         let interfaces = mib2.children.iter().find(|n| n.id == "interfaces").expect("interfaces group");
         let if_table = interfaces.children.iter().find(|n| n.id == "ifTable").expect("ifTable node");
         assert_eq!(if_table.kind, NodeKind::Table);
         assert!(if_table.children.is_empty(), "table columns/entry should not appear as tree nodes");
+    }
+
+    #[test]
+    fn iso_is_the_sole_tree_root_and_unrelated_roots_are_filtered_out() {
+        let dir = write_fixture(IF_TABLE_MIB);
+        let result = parse_directories(&[dir.path().to_string_lossy().to_string()]);
+
+        assert_eq!(result.tree.len(), 1, "tree should have exactly one root");
+        let iso = &result.tree[0];
+        assert_eq!(iso.id, "iso");
+        assert_eq!(iso.oid, "1");
+        assert!(iso.resolved);
+
+        // `enterprises ::= { private 1 }` never resolves (`private` isn't declared
+        // anywhere in the fixture), so it can't be confirmed to live under iso and
+        // must not appear anywhere in the tree - neither as a root nor nested.
+        fn contains(nodes: &[MibTreeNode], id: &str) -> bool {
+            nodes.iter().any(|n| n.id == id || contains(&n.children, id))
+        }
+        assert!(!contains(&result.tree, "enterprises"), "unresolved non-iso root should be filtered out");
     }
 
     #[test]
