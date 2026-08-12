@@ -70,8 +70,13 @@ pub struct FileErrors {
 }
 
 #[derive(Serialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct ParseResult {
     pub tree: Vec<MibTreeNode>,
+    /// Flat list of every table as a root node, columns as its children - an
+    /// alternate view of the same data for browsing tables directly instead
+    /// of hunting through the group hierarchy.
+    pub tables_tree: Vec<MibTreeNode>,
     pub tables: HashMap<String, TableInfo>,
     pub symbols: HashMap<String, SymbolInfo>,
     pub errors: Vec<FileErrors>,
@@ -161,6 +166,7 @@ pub fn parse_directories(dirs: &[String]) -> ParseResult {
     }
 
     let tree = build_tree(&raw, &resolved);
+    let tables_tree = build_tables_tree(&raw, &resolved);
     let tables = build_tables(&raw, &sequence_types, &resolved);
     let symbols = raw
         .iter()
@@ -176,7 +182,7 @@ pub fn parse_directories(dirs: &[String]) -> ParseResult {
         })
         .collect();
 
-    ParseResult { tree, tables, symbols, errors }
+    ParseResult { tree, tables_tree, tables, symbols, errors }
 }
 
 fn node_text<'a>(node: Node, src: &'a [u8]) -> &'a str {
@@ -437,6 +443,55 @@ fn build_tree(raw: &[RawSymbol], resolved: &HashMap<String, Vec<u32>>) -> Vec<Mi
     vec![MibTreeNode { id: "iso".to_string(), label: "iso".to_string(), oid: "1".to_string(), resolved: true, kind: NodeKind::Group, children }]
 }
 
+/// Alternate tree shape for "tables only" browsing: every table as a root
+/// node (alphabetical, no group hierarchy), its columns as direct children.
+fn build_tables_tree(raw: &[RawSymbol], resolved: &HashMap<String, Vec<u32>>) -> Vec<MibTreeNode> {
+    let by_name: HashMap<&str, &RawSymbol> = raw.iter().map(|s| (s.name.as_str(), s)).collect();
+    let mut children_of: HashMap<String, Vec<&RawSymbol>> = HashMap::new();
+    for s in raw {
+        if s.kind == RawKind::Other {
+            continue;
+        }
+        if let Some(p) = parent_name(&s.oid) {
+            if by_name.contains_key(p.as_str()) {
+                children_of.entry(p).or_default().push(s);
+            }
+        }
+    }
+
+    fn leaf_node(s: &RawSymbol, resolved: &HashMap<String, Vec<u32>>) -> MibTreeNode {
+        let path = resolved.get(&s.name);
+        MibTreeNode { id: s.name.clone(), label: s.name.clone(), oid: path.map(|p| dotted(p)).unwrap_or_default(), resolved: path.is_some(), kind: NodeKind::Scalar, children: Vec::new() }
+    }
+
+    let mut tables: Vec<&RawSymbol> = raw.iter().filter(|s| s.kind == RawKind::Table).collect();
+    tables.sort_by(|a, b| a.name.cmp(&b.name));
+
+    tables
+        .into_iter()
+        .map(|t| {
+            // Columns sit one level below the table, under a hidden "entry"
+            // object (SMI convention: table -> entry -> columns) - collect
+            // columns from every entry declared under this table.
+            let mut columns: Vec<&RawSymbol> = Vec::new();
+            for entry in children_of.get(&t.name).cloned().unwrap_or_default() {
+                columns.extend(children_of.get(&entry.name).cloned().unwrap_or_default());
+            }
+            columns.sort_by(|a, b| a.name.cmp(&b.name));
+
+            let path = resolved.get(&t.name);
+            MibTreeNode {
+                id: t.name.clone(),
+                label: t.name.clone(),
+                oid: path.map(|p| dotted(p)).unwrap_or_default(),
+                resolved: path.is_some(),
+                kind: NodeKind::Table,
+                children: columns.iter().map(|c| leaf_node(c, resolved)).collect(),
+            }
+        })
+        .collect()
+}
+
 fn build_tables(raw: &[RawSymbol], sequence_types: &HashMap<String, Vec<String>>, resolved: &HashMap<String, Vec<u32>>) -> HashMap<String, TableInfo> {
     let by_name: HashMap<&str, &RawSymbol> = raw.iter().map(|s| (s.name.as_str(), s)).collect();
     let mut tables = HashMap::new();
@@ -612,6 +667,28 @@ END
             nodes.iter().any(|n| n.id == id || contains(&n.children, id))
         }
         assert!(!contains(&result.tree, "enterprises"), "unresolved non-iso root should be filtered out");
+    }
+
+    #[test]
+    fn tables_tree_lists_every_table_as_a_root_with_its_columns_as_children() {
+        let dir = write_fixture(IF_TABLE_MIB);
+        let result = parse_directories(&[dir.path().to_string_lossy().to_string()]);
+
+        assert_eq!(result.tables_tree.len(), 1, "only one table in the fixture");
+        let if_table = &result.tables_tree[0];
+        assert_eq!(if_table.id, "ifTable");
+        assert_eq!(if_table.oid, "1.3.6.1.2.1.2.2");
+        assert_eq!(if_table.kind, NodeKind::Table);
+
+        let names: Vec<&str> = if_table.children.iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(names, vec!["ifDescr", "ifIndex", "ifOperStatus"], "columns sorted alphabetically, entry level skipped");
+        for col in &if_table.children {
+            assert_eq!(col.kind, NodeKind::Scalar);
+            assert!(col.resolved, "{} should resolve through ifEntry -> ifTable", col.id);
+            assert!(col.children.is_empty());
+        }
+        let if_descr = if_table.children.iter().find(|c| c.id == "ifDescr").unwrap();
+        assert_eq!(if_descr.oid, "1.3.6.1.2.1.2.2.1.2");
     }
 
     #[test]

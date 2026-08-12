@@ -17,6 +17,8 @@ export interface FileErrors {
 
 export interface ParseResult {
   tree: MibNode[];
+  /** Alternate view: every table as a root, its columns as children. */
+  tablesTree: MibNode[];
   errors: FileErrors[];
 }
 
@@ -79,6 +81,8 @@ export interface PaneState {
 export interface AppState {
   filterText: string;
   expanded: Record<string, boolean>;
+  /** When true, the sidebar shows only tables (as roots) with their columns as children, instead of the full group hierarchy. */
+  tablesOnlyMode: boolean;
   mibDirs: string[];
   /** Inline text-entry draft for adding a MIB directory outside Tauri (no native picker there); null when not editing. */
   mibDirDraft: string | null;

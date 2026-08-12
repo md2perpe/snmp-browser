@@ -134,6 +134,23 @@ function renderSidebar(store: Store): HTMLElement {
         "data-focus-key": "filter",
         oninput: (e: Event) => store.setFilterText((e.target as HTMLInputElement).value),
       }),
+      el(
+        "div",
+        { class: "tree-mode-toggle" },
+        [
+          { label: "Tree", value: false },
+          { label: "Tables", value: true },
+        ].map(({ label, value }) =>
+          el(
+            "button",
+            {
+              class: "tree-mode-btn" + (store.state.tablesOnlyMode === value ? " active" : ""),
+              onclick: () => store.setTablesOnlyMode(value),
+            },
+            [label],
+          ),
+        ),
+      ),
     ]),
     el(
       "div",
@@ -329,7 +346,7 @@ function renderToolbar(store: Store, pane: PaneState, tab: TabState): HTMLElemen
     );
   }
 
-  const selectedNode = store.findNode(store.tree, tab.selectedNode);
+  const selectedNode = store.findNode(store.activeTree(), tab.selectedNode);
   const canFetch = store.canFetch(selectedNode);
 
   fields.push(el("div", { class: "spacer" }));
@@ -350,7 +367,7 @@ function renderToolbar(store: Store, pane: PaneState, tab: TabState): HTMLElemen
 }
 
 function renderTableToolbar(store: Store, pane: PaneState, tab: TabState): HTMLElement {
-  const node = store.findNode(store.tree, tab.selectedNode);
+  const node = store.findNode(store.activeTree(), tab.selectedNode);
   const label = node ? node.label : "(nothing selected)";
   const oid = node ? node.oid || "(unresolved)" : "";
 
