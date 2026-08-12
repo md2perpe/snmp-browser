@@ -199,10 +199,97 @@ button {
   color: var(--red);
 }
 .mib-dir-warning {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font-family: inherit;
   font-size: 10.5px;
   color: var(--yellow);
   margin-top: 4px;
-  cursor: default;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+}
+.mib-dir-warning:hover {
+  text-decoration: underline;
+}
+
+/* ---------- Modal ---------- */
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+.modal-panel {
+  width: 560px;
+  max-width: calc(100vw - 48px);
+  max-height: calc(100vh - 96px);
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-sidebar);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+}
+.modal-header {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border-soft);
+}
+.modal-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.modal-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 14px 14px;
+}
+.parse-error-group + .parse-error-group {
+  margin-top: 14px;
+}
+.parse-error-file {
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  padding-top: 10px;
+  border-top: 1px solid var(--border-hair);
+}
+.parse-error-group:first-child .parse-error-file {
+  border-top: none;
+  padding-top: 0;
+}
+.parse-error-list {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.parse-error-list li {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  padding-left: 14px;
+  position: relative;
+}
+.parse-error-list li::before {
+  content: "⚠";
+  position: absolute;
+  left: 0;
+  color: var(--yellow);
+  font-size: 10px;
 }
 
 .filter-box {

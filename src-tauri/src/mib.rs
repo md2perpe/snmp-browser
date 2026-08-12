@@ -64,11 +64,17 @@ pub struct SymbolInfo {
 }
 
 #[derive(Serialize, Clone, Debug, Default)]
+pub struct FileErrors {
+    pub file: String,
+    pub errors: Vec<String>,
+}
+
+#[derive(Serialize, Clone, Debug, Default)]
 pub struct ParseResult {
     pub tree: Vec<MibTreeNode>,
     pub tables: HashMap<String, TableInfo>,
     pub symbols: HashMap<String, SymbolInfo>,
-    pub errors: Vec<String>,
+    pub errors: Vec<FileErrors>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -94,26 +100,36 @@ struct RawSymbol {
     /// Set when SYNTAX is `SEQUENCE OF X` - X is the entry type name.
     sequence_of_target: Option<String>,
     enum_values: Vec<(i64, String)>,
+    /// Path of the file this symbol was declared in, for grouping error messages.
+    file: String,
+}
+
+fn push_error(errors: &mut Vec<FileErrors>, file: &str, msg: String) {
+    if let Some(entry) = errors.iter_mut().find(|e| e.file == file) {
+        entry.errors.push(msg);
+    } else {
+        errors.push(FileErrors { file: file.to_string(), errors: vec![msg] });
+    }
 }
 
 pub fn parse_directories(dirs: &[String]) -> ParseResult {
     let mut parser = Parser::new();
     if parser.set_language(&tree_sitter_asn1::LANGUAGE.into()).is_err() {
         return ParseResult {
-            errors: vec!["internal error: failed to load MIB grammar".into()],
+            errors: vec![FileErrors { file: "<internal>".into(), errors: vec!["failed to load MIB grammar".into()] }],
             ..Default::default()
         };
     }
 
     let mut raw: Vec<RawSymbol> = Vec::new();
     let mut sequence_types: HashMap<String, Vec<String>> = HashMap::new();
-    let mut errors = Vec::new();
+    let mut errors: Vec<FileErrors> = Vec::new();
 
     for dir in dirs {
         let entries = match std::fs::read_dir(dir) {
             Ok(e) => e,
             Err(e) => {
-                errors.push(format!("{dir}: {e}"));
+                push_error(&mut errors, dir, format!("{e}"));
                 continue;
             }
         };
@@ -125,20 +141,23 @@ pub fn parse_directories(dirs: &[String]) -> ParseResult {
             let Ok(src) = std::fs::read_to_string(&path) else {
                 continue; // not a readable text file - skip silently
             };
+            let file = path.display().to_string();
             let Some(tree) = parser.parse(&src, None) else {
-                errors.push(format!("{}: failed to parse", path.display()));
+                push_error(&mut errors, &file, "failed to parse".into());
                 continue;
             };
             if tree.root_node().has_error() {
-                errors.push(format!("{}: contains syntax errors (parsed on a best-effort basis)", path.display()));
+                push_error(&mut errors, &file, "contains syntax errors (parsed on a best-effort basis)".into());
             }
-            walk_module(tree.root_node(), src.as_bytes(), &mut raw, &mut sequence_types);
+            walk_module(tree.root_node(), src.as_bytes(), &file, &mut raw, &mut sequence_types);
         }
     }
 
     let (resolved, unresolved_names) = resolve_oids(&raw);
+    let file_of: HashMap<&str, &str> = raw.iter().map(|s| (s.name.as_str(), s.file.as_str())).collect();
     for name in unresolved_names {
-        errors.push(format!("{name}: could not resolve to an absolute OID (missing ancestor definition)"));
+        let file = file_of.get(name.as_str()).copied().unwrap_or("<unknown>");
+        push_error(&mut errors, file, format!("{name}: could not resolve to an absolute OID (missing ancestor definition)"));
     }
 
     let tree = build_tree(&raw, &resolved);
@@ -170,7 +189,7 @@ fn find_child_by_kind<'a>(node: Node<'a>, kind: &str) -> Option<Node<'a>> {
     found
 }
 
-fn walk_module(root: Node, src: &[u8], raw: &mut Vec<RawSymbol>, sequence_types: &mut HashMap<String, Vec<String>>) {
+fn walk_module(root: Node, src: &[u8], file: &str, raw: &mut Vec<RawSymbol>, sequence_types: &mut HashMap<String, Vec<String>>) {
     let Some(module_def) = find_child_by_kind(root, "module_definition") else { return };
     let mut cursor = module_def.walk();
     for assignment in module_def.named_children(&mut cursor) {
@@ -187,6 +206,7 @@ fn walk_module(root: Node, src: &[u8], raw: &mut Vec<RawSymbol>, sequence_types:
                     kind: RawKind::Group,
                     sequence_of_target: None,
                     enum_values: vec![],
+                    file: file.to_string(),
                 });
             }
             "object_type_assignment" => {
@@ -221,6 +241,7 @@ fn walk_module(root: Node, src: &[u8], raw: &mut Vec<RawSymbol>, sequence_types:
                     kind,
                     sequence_of_target,
                     enum_values,
+                    file: file.to_string(),
                 });
             }
             "notification_type_assignment" | "trap_type_assignment" => {
@@ -236,6 +257,7 @@ fn walk_module(root: Node, src: &[u8], raw: &mut Vec<RawSymbol>, sequence_types:
                         kind: RawKind::Other,
                         sequence_of_target: None,
                         enum_values: vec![],
+                        file: file.to_string(),
                     });
                 }
             }
@@ -322,8 +344,16 @@ fn try_resolve(components: &[OidComponent], resolved: &HashMap<String, Vec<u32>>
     Some(path)
 }
 
+/// The top-level arcs of the ASN.1 OID tree (X.680 §12.2) are primitives of
+/// the notation itself - `iso OBJECT IDENTIFIER ::= { 1 }` never actually
+/// appears in MIB source, yet nearly every MIB's whole ancestor chain roots
+/// through `iso`. Seed them so resolution doesn't treat every module as
+/// unresolvable just because none of them declares its own root.
+const WELL_KNOWN_ROOTS: &[(&str, u32)] =
+    &[("ccitt", 0), ("itu-t", 0), ("iso", 1), ("joint-iso-itu-t", 2), ("joint-iso-ccitt", 2)];
+
 fn resolve_oids(raw: &[RawSymbol]) -> (HashMap<String, Vec<u32>>, Vec<String>) {
-    let mut resolved: HashMap<String, Vec<u32>> = HashMap::new();
+    let mut resolved: HashMap<String, Vec<u32>> = WELL_KNOWN_ROOTS.iter().map(|&(name, arc)| (name.to_string(), vec![arc])).collect();
     let mut remaining: Vec<&RawSymbol> = raw.iter().collect();
     loop {
         let mut progressed = false;
@@ -518,7 +548,26 @@ END
         // "private" is never defined in this fixture, so enterprises can't resolve.
         let enterprises = result.symbols.get("enterprises").expect("enterprises symbol");
         assert!(!enterprises.resolved);
-        assert!(result.errors.iter().any(|e| e.contains("enterprises")));
+        assert!(result.errors.iter().any(|fe| fe.errors.iter().any(|e| e.contains("enterprises"))));
+    }
+
+    #[test]
+    fn well_known_asn1_roots_resolve_without_being_declared() {
+        // Real MIBs never declare `iso OBJECT IDENTIFIER ::= { 1 }` themselves -
+        // it's a primitive of the notation - so the whole ancestor chain must
+        // still resolve through it.
+        let mib = r#"
+TEST-MIB DEFINITIONS ::= BEGIN
+org OBJECT IDENTIFIER ::= { iso 3 }
+dod OBJECT IDENTIFIER ::= { org 6 }
+END
+"#;
+        let dir = write_fixture(mib);
+        let result = parse_directories(&[dir.path().to_string_lossy().to_string()]);
+
+        let dod = result.symbols.get("dod").expect("dod symbol");
+        assert!(dod.resolved, "dod should resolve through the well-known 'iso' root");
+        assert_eq!(dod.oid, "1.3.6");
     }
 
     #[test]

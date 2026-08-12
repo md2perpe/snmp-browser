@@ -62,7 +62,7 @@ function renderSidebar(store: Store): HTMLElement {
   const visibleNodes = store.getVisibleNodes();
   const errors = store.state.parseErrors;
 
-  const dirRows = store.state.mibDirs.map((dir) =>
+  const dirRows: HTMLElement[] = store.state.mibDirs.map((dir) =>
     el("div", { class: "mib-dir-row" }, [
       el("div", { class: "mib-dir-icon" }),
       el("div", { class: "mib-dir-path", title: dir }, [dir]),
@@ -70,8 +70,13 @@ function renderSidebar(store: Store): HTMLElement {
     ]),
   );
   if (errors.length) {
+    const issueCount = errors.reduce((n, fe) => n + fe.errors.length, 0);
     dirRows.push(
-      el("div", { class: "mib-dir-warning", title: errors.join("\n") }, [`⚠ ${errors.length} issue${errors.length === 1 ? "" : "s"} while parsing`]),
+      el(
+        "button",
+        { class: "mib-dir-warning", onclick: () => store.toggleParseErrors() },
+        [`⚠ ${issueCount} issue${issueCount === 1 ? "" : "s"} while parsing`],
+      ),
     );
   }
 
@@ -100,6 +105,29 @@ function renderSidebar(store: Store): HTMLElement {
       { class: "tree" },
       visibleNodes.map(({ node, depth }) => renderTreeRow(store, node, depth, activeTab.selectedNode)),
     ),
+  ]);
+}
+
+function renderParseErrorsModal(store: Store): HTMLElement {
+  const groups = store.state.parseErrors.map((fe) =>
+    el("div", { class: "parse-error-group" }, [
+      el("div", { class: "parse-error-file" }, [fe.file]),
+      el(
+        "ul",
+        { class: "parse-error-list" },
+        fe.errors.map((e) => el("li", {}, [e])),
+      ),
+    ]),
+  );
+
+  return el("div", { class: "modal-overlay", onclick: () => store.toggleParseErrors() }, [
+    el("div", { class: "modal-panel", onclick: (e: Event) => e.stopPropagation() }, [
+      el("div", { class: "modal-header" }, [
+        el("div", { class: "modal-title" }, ["Parse issues"]),
+        el("button", { class: "icon-btn", title: "Close", onclick: () => store.toggleParseErrors() }, ["✕"]),
+      ]),
+      el("div", { class: "modal-body" }, groups),
+    ]),
   ]);
 }
 
@@ -434,5 +462,12 @@ export function renderApp(store: Store): HTMLElement {
     bodyChildren.push(renderCollapsedRail(store));
   }
   bodyChildren.push(renderPaneGroup(store));
-  return el("div", { class: "app-body" }, bodyChildren);
+  const appBody = el("div", { class: "app-body" }, bodyChildren);
+
+  const showModal = store.state.parseErrorsOpen && store.state.parseErrors.length > 0;
+  if (!showModal) return appBody;
+
+  // Wrapped in a `display: contents` div so the fixed-position modal sits
+  // alongside `.app-body` without becoming a flex child of `#app` itself.
+  return el("div", { style: { display: "contents" } }, [appBody, renderParseErrorsModal(store)]);
 }
