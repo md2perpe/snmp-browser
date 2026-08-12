@@ -13,7 +13,7 @@ declare global {
   }
 }
 
-const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+export const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 const API_BASE = import.meta.env.VITE_API_BASE ?? "http://127.0.0.1:8787";
 
 export async function invoke<T>(cmd: string, args: Record<string, unknown> = {}): Promise<T> {
@@ -30,12 +30,14 @@ export async function invoke<T>(cmd: string, args: Record<string, unknown> = {})
   return data as T;
 }
 
-/** Directory picker: native dialog under Tauri, a plain prompt in the browser (no filesystem access there). */
+/**
+ * Native directory picker — only available under Tauri. Browsers can't expose
+ * real filesystem paths, and embedded webviews (VSCode's Simple Browser
+ * included) commonly block `window.prompt` outright, so outside Tauri the
+ * caller falls back to an inline text field instead of calling this.
+ */
 export async function pickDirectory(): Promise<string | null> {
-  if (isTauri) {
-    const selected = await tauriOpen({ directory: true, multiple: false });
-    if (!selected || Array.isArray(selected)) return null;
-    return selected;
-  }
-  return window.prompt("Browser mode has no native file picker — enter the absolute path to a MIB directory on the machine running the standalone backend:");
+  const selected = await tauriOpen({ directory: true, multiple: false });
+  if (!selected || Array.isArray(selected)) return null;
+  return selected;
 }

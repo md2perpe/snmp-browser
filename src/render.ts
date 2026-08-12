@@ -80,6 +80,26 @@ function renderSidebar(store: Store): HTMLElement {
     );
   }
 
+  const draft = store.state.mibDirDraft;
+  const draftRow =
+    draft === null
+      ? null
+      : el("div", { class: "mib-dir-draft-row" }, [
+          el("input", {
+            class: "mib-dir-draft-input",
+            placeholder: "/absolute/path/to/mibs",
+            value: draft,
+            "data-focus-key": "mibDirDraft",
+            oninput: (e: Event) => store.updateMibDirDraft((e.target as HTMLInputElement).value),
+            onkeydown: (e: KeyboardEvent) => {
+              if (e.key === "Enter") void store.submitMibDirDraft();
+              else if (e.key === "Escape") store.cancelMibDirDraft();
+            },
+          }),
+          el("button", { class: "mib-dir-draft-confirm", title: "Add", onclick: () => void store.submitMibDirDraft() }, ["✓"]),
+          el("button", { class: "mib-dir-draft-cancel", title: "Cancel", onclick: () => store.cancelMibDirDraft() }, ["×"]),
+        ]);
+
   return el("div", { class: "sidebar", style: { width: store.state.leftWidth + "px" } }, [
     el("div", { class: "sidebar-header" }, [
       el("button", { class: "icon-btn", title: "Hide sidebar", onclick: () => store.toggleLeft() }, ["▤"]),
@@ -87,9 +107,24 @@ function renderSidebar(store: Store): HTMLElement {
     el("div", { class: "mib-dirs" }, [
       el("div", { class: "mib-dirs-head" }, [
         el("div", { class: "mib-dirs-title" }, ["MIB Directories"]),
-        el("button", { class: "mib-dir-add", title: "Add MIB directory", onclick: () => store.addMibDir() }, ["+"]),
+        el(
+          "button",
+          {
+            class: "mib-dir-add",
+            title: "Add MIB directory",
+            onclick: () => {
+              // addMibDir() runs synchronously up to its first `await` (only taken
+              // on the native-picker path), so the draft input already exists
+              // in the DOM by the time this call returns in browser mode.
+              void store.addMibDir();
+              document.querySelector<HTMLInputElement>(".mib-dir-draft-input")?.focus();
+            },
+          },
+          ["+"],
+        ),
       ]),
       el("div", { class: "mib-dir-list" }, dirRows),
+      draftRow,
     ]),
     el("div", { class: "filter-box" }, [
       el("input", {

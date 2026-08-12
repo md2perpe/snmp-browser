@@ -80,6 +80,8 @@ export interface AppState {
   filterText: string;
   expanded: Record<string, boolean>;
   mibDirs: string[];
+  /** Inline text-entry draft for adding a MIB directory outside Tauri (no native picker there); null when not editing. */
+  mibDirDraft: string | null;
   parseErrors: FileErrors[];
   parseErrorsOpen: boolean;
   leftWidth: number;

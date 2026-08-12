@@ -1,4 +1,4 @@
-import { invoke, pickDirectory } from "./api";
+import { invoke, isTauri, pickDirectory } from "./api";
 import { DEFAULT_COL_WIDTH, mockHostProfiles } from "./mockData";
 import type { AppState, HostProfile, MibNode, PaneState, ParseResult, Row, RowMetaEntry, SnmpVersion, TabState } from "./types";
 
@@ -23,6 +23,7 @@ export class Store {
       filterText: "",
       expanded: {},
       mibDirs: [],
+      mibDirDraft: null,
       parseErrors: [],
       parseErrorsOpen: false,
       leftWidth: 330,
@@ -220,9 +221,38 @@ export class Store {
   }
 
   async addMibDir() {
+    if (!isTauri) {
+      this.state.mibDirDraft = "";
+      this.notify();
+      return;
+    }
     const selected = await pickDirectory();
     if (!selected) return;
-    this.state.mibDirs = await invoke<string[]>("add_mib_dir", { path: selected });
+    await this.commitMibDir(selected);
+  }
+
+  updateMibDirDraft(text: string) {
+    this.state.mibDirDraft = text;
+    this.notify();
+  }
+
+  cancelMibDirDraft() {
+    this.state.mibDirDraft = null;
+    this.notify();
+  }
+
+  async submitMibDirDraft() {
+    const path = this.state.mibDirDraft?.trim();
+    this.state.mibDirDraft = null;
+    if (!path) {
+      this.notify();
+      return;
+    }
+    await this.commitMibDir(path);
+  }
+
+  private async commitMibDir(path: string) {
+    this.state.mibDirs = await invoke<string[]>("add_mib_dir", { path });
     this.notify();
     await this.loadMibTree();
   }
