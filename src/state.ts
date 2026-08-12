@@ -21,7 +21,6 @@ export class Store {
     const tab1 = this.makeTab("t1", "h1");
     const tab2 = this.makeTab("t2", "h2", { autoRefresh: false });
     this.state = {
-      filterText: "",
       expanded: {},
       tablesOnlyMode: false,
       mibDirs: [],
@@ -184,11 +183,6 @@ export class Store {
 
   // ---------- sidebar / MIB directories ----------
 
-  setFilterText(text: string) {
-    this.state.filterText = text;
-    this.notify();
-  }
-
   toggleLeft() {
     this.state.leftCollapsed = !this.state.leftCollapsed;
     this.notify();
@@ -277,27 +271,13 @@ export class Store {
   }
 
   getVisibleNodes(): { node: MibNode; depth: number }[] {
-    const tree = this.activeTree();
-    const filter = this.state.filterText.trim().toLowerCase();
-    if (!filter) return this.flatten(tree, 0, [], this.state.expanded);
-    // A filter searches the whole tree regardless of collapse state - a
-    // search box that only finds nodes you'd already expanded manually
-    // isn't useful, since everything starts collapsed.
-    return this.flattenAll(tree, 0, []).filter(({ node }) => node.label.toLowerCase().includes(filter));
+    return this.flatten(this.activeTree(), 0, [], this.state.expanded);
   }
 
   private flatten(nodes: MibNode[], depth: number, out: { node: MibNode; depth: number }[], expanded: Record<string, boolean>) {
     for (const n of nodes) {
       out.push({ node: n, depth });
       if (n.children && expanded[n.id]) this.flatten(n.children, depth + 1, out, expanded);
-    }
-    return out;
-  }
-
-  private flattenAll(nodes: MibNode[], depth: number, out: { node: MibNode; depth: number }[]) {
-    for (const n of nodes) {
-      out.push({ node: n, depth });
-      if (n.children) this.flattenAll(n.children, depth + 1, out);
     }
     return out;
   }
