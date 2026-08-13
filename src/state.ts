@@ -18,8 +18,6 @@ export class Store {
   private autoRefreshTimers = new Map<string, ReturnType<typeof setInterval>>();
 
   constructor() {
-    const tab1 = this.makeTab("t1", "h1");
-    const tab2 = this.makeTab("t2", "h2", { autoRefresh: false });
     this.state = {
       expanded: {},
       tablesOnlyMode: false,
@@ -30,8 +28,8 @@ export class Store {
       leftWidth: 330,
       leftCollapsed: false,
       panes: [
-        { id: "p1", width: 620, activeTabId: tab1.id, tabs: [tab1] },
-        { id: "p2", width: null, activeTabId: tab2.id, tabs: [tab2] },
+        { id: "p1", width: 620, activeTabId: null, tabs: [] },
+        { id: "p2", width: null, activeTabId: null, tabs: [] },
       ],
       activePaneId: "p1",
     };
@@ -56,15 +54,17 @@ export class Store {
   // ---------- tab / pane construction ----------
 
   makeTab(id: string, hostId: string, opts: Partial<TabState> = {}): TabState {
+    // Falls back to blank connection fields when no host profile matches (or
+    // none are configured at all) - the fields are freely editable either way.
     const h = this.hostProfiles.find((p) => p.id === hostId) ?? this.hostProfiles[0];
     return {
       id,
-      hostId: h.id,
-      hostAddr: h.addr,
-      hostPort: h.port,
+      hostId: h?.id ?? "",
+      hostAddr: h?.addr ?? "",
+      hostPort: h?.port ?? "",
       version: "v2c",
-      community: h.community,
-      v3User: h.v3User,
+      community: h?.community ?? "",
+      v3User: h?.v3User ?? "",
       v3Auth: "",
       v3Priv: "",
       selectedNode: "",
@@ -91,10 +91,10 @@ export class Store {
   getActivePane(): PaneState {
     return this.getPane(this.state.activePaneId) ?? this.state.panes[0];
   }
-  getPaneActiveTab(pane: PaneState): TabState {
+  getPaneActiveTab(pane: PaneState): TabState | undefined {
     return pane.tabs.find((t) => t.id === pane.activeTabId) ?? pane.tabs[0];
   }
-  getActiveTab(): TabState {
+  getActiveTab(): TabState | undefined {
     return this.getPaneActiveTab(this.getActivePane());
   }
 
@@ -106,7 +106,9 @@ export class Store {
   updateActiveTabInPane(paneId: string, patch: Patch<TabState>) {
     const pane = this.getPane(paneId);
     if (!pane) return;
-    this.applyPatch(this.getPaneActiveTab(pane), patch);
+    const tab = this.getPaneActiveTab(pane);
+    if (!tab) return;
+    this.applyPatch(tab, patch);
     this.notify();
   }
 
@@ -139,12 +141,10 @@ export class Store {
     const pane = this.getPane(paneId);
     if (!pane) return;
     this.stopAutoRefresh(tabId);
-    if (pane.tabs.length <= 1) {
-      this.closePane(paneId);
-      return;
-    }
     pane.tabs = pane.tabs.filter((t) => t.id !== tabId);
-    if (pane.activeTabId === tabId) pane.activeTabId = pane.tabs[pane.tabs.length - 1].id;
+    if (pane.activeTabId === tabId) {
+      pane.activeTabId = pane.tabs.length ? pane.tabs[pane.tabs.length - 1].id : null;
+    }
     this.notify();
   }
 
@@ -153,12 +153,12 @@ export class Store {
     const pane = this.getPane(paneId);
     if (!pane) return;
     const sourceTab = this.getPaneActiveTab(pane);
-    const newTab: TabState = { ...sourceTab, id: "tab" + Date.now() };
+    const newTab: TabState | null = sourceTab ? { ...sourceTab, id: "tab" + Date.now() } : null;
     pane.width = 620;
-    const newPane: PaneState = { id: "pane" + Date.now(), width: null, tabs: [newTab], activeTabId: newTab.id };
+    const newPane: PaneState = { id: "pane" + Date.now(), width: null, tabs: newTab ? [newTab] : [], activeTabId: newTab?.id ?? null };
     this.state.panes.push(newPane);
     this.state.activePaneId = newPane.id;
-    if (newTab.autoRefresh) this.startAutoRefresh(newPane.id, newTab.id);
+    if (newTab?.autoRefresh) this.startAutoRefresh(newPane.id, newTab.id);
     this.notify();
   }
 
@@ -357,6 +357,7 @@ export class Store {
     const pane = this.getPane(paneId);
     if (!pane) return;
     const tab = this.getPaneActiveTab(pane);
+    if (!tab) return;
     tab.autoRefresh = !tab.autoRefresh;
     if (tab.autoRefresh) this.startAutoRefresh(paneId, tab.id);
     else this.stopAutoRefresh(tab.id);
@@ -392,7 +393,9 @@ export class Store {
   async manualFetch(paneId: string) {
     const pane = this.getPane(paneId);
     if (!pane) return;
-    await this.runFetch(this.getPaneActiveTab(pane));
+    const tab = this.getPaneActiveTab(pane);
+    if (!tab) return;
+    await this.runFetch(tab);
     this.notify();
   }
 

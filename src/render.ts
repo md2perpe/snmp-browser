@@ -58,7 +58,7 @@ function renderTreeRow(store: Store, node: MibNode, depth: number, selectedNodeI
 }
 
 function renderSidebar(store: Store): HTMLElement {
-  const activeTab = store.getActiveTab();
+  const selectedNodeId = store.getActiveTab()?.selectedNode ?? "";
   const visibleNodes = store.getVisibleNodes();
   const errors = store.state.parseErrors;
 
@@ -148,7 +148,7 @@ function renderSidebar(store: Store): HTMLElement {
     el(
       "div",
       { class: "tree" },
-      visibleNodes.map(({ node, depth }) => renderTreeRow(store, node, depth, activeTab.selectedNode)),
+      visibleNodes.map(({ node, depth }) => renderTreeRow(store, node, depth, selectedNodeId)),
     ),
   ]);
 }
@@ -473,13 +473,23 @@ function renderStatusBar(tab: TabState): HTMLElement {
   ]);
 }
 
+function renderEmptyPane(store: Store, pane: PaneState): HTMLElement {
+  return el("div", { class: "pane-empty" }, [
+    el("div", { class: "pane-empty-text" }, ["No tab open"]),
+    el("button", { class: "pane-empty-btn", onclick: () => store.addTabToPane(pane.id) }, ["+ Open a tab"]),
+  ]);
+}
+
 function renderPane(store: Store, pane: PaneState, isLast: boolean): HTMLElement {
   const tab = store.getPaneActiveTab(pane);
   const flexCss = isLast ? "1 1 0%" : `0 0 ${pane.width}px`;
+  const body = tab
+    ? [renderToolbar(store, pane, tab), renderTableToolbar(store, pane, tab), renderTable(store, pane, tab), renderStatusBar(tab)]
+    : [renderEmptyPane(store, pane)];
   return el(
     "div",
     { class: "pane", style: { flex: flexCss }, onclick: () => store.focusPane(pane.id) },
-    [renderTabBar(store, pane), renderToolbar(store, pane, tab), renderTableToolbar(store, pane, tab), renderTable(store, pane, tab), renderStatusBar(tab)],
+    [renderTabBar(store, pane), ...body],
   );
 }
 

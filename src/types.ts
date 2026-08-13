@@ -74,7 +74,8 @@ export interface PaneState {
   id: string;
   /** Fixed pixel width; null means "flexible" (always true for the last pane). */
   width: number | null;
-  activeTabId: string;
+  /** null when the pane has no tabs open. */
+  activeTabId: string | null;
   tabs: TabState[];
 }
 
