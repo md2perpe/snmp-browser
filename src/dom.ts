@@ -38,15 +38,18 @@ export function el<K extends keyof HTMLElementTagNameMap>(
   return node;
 }
 
-function cssEscape(s: string): string {
+export function cssEscape(s: string): string {
   return typeof CSS !== "undefined" && CSS.escape ? CSS.escape(s) : s.replace(/[^a-zA-Z0-9_-]/g, "\\$&");
 }
 
 /**
  * Rebuilds `root`'s contents from `build()`, restoring focus (and text
  * selection) afterwards if the previously-focused element carried a
- * `data-focus-key` attribute. The app re-renders its whole tree on every
- * state change, so this is what keeps a text input usable while typing.
+ * `data-focus-key` attribute, and restoring scroll position for any element
+ * carrying a `data-preserve-scroll` key. The app re-renders its whole tree on
+ * every state change - even ones unrelated to a given panel, like dragging
+ * the sidebar splitter - so without this, every scrollable panel would jump
+ * back to the top on each unrelated state change.
  */
 export function renderPreservingFocus(root: HTMLElement, build: () => Node) {
   const active = document.activeElement;
@@ -65,6 +68,11 @@ export function renderPreservingFocus(root: HTMLElement, build: () => Node) {
     }
   }
 
+  const scrollPositions = new Map<string, number>();
+  root.querySelectorAll<HTMLElement>("[data-preserve-scroll]").forEach((el) => {
+    scrollPositions.set(el.getAttribute("data-preserve-scroll")!, el.scrollTop);
+  });
+
   root.replaceChildren(build());
 
   if (focusKey) {
@@ -80,6 +88,11 @@ export function renderPreservingFocus(root: HTMLElement, build: () => Node) {
       }
     }
   }
+
+  scrollPositions.forEach((scrollTop, key) => {
+    const found = root.querySelector(`[data-preserve-scroll="${cssEscape(key)}"]`);
+    if (found instanceof HTMLElement) found.scrollTop = scrollTop;
+  });
 }
 
 /** Drag helper shared by all splitters and column resize handles. */
