@@ -29,10 +29,7 @@ export class Store {
       parseErrorsOpen: false,
       leftWidth: 330,
       leftCollapsed: false,
-      panes: [
-        { id: "p1", width: 620, activeTabId: null, tabs: [] },
-        { id: "p2", width: null, activeTabId: null, tabs: [] },
-      ],
+      panes: [{ id: "p1", width: null, activeTabId: null, tabs: [] }],
       activePaneId: "p1",
       treeContextMenu: null,
     };
