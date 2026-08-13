@@ -35,6 +35,13 @@ function renderTreeRow(store: Store, node: MibNode, depth: number, selectedNodeI
       title,
       style: { paddingLeft: depth * 16 + 2 + "px", opacity: node.resolved ? "1" : "0.45" },
       onclick: () => store.selectNode(store.state.activePaneId, node),
+      oncontextmenu:
+        node.type === "table"
+          ? (e: MouseEvent) => {
+              e.preventDefault();
+              store.openTreeContextMenu(e.clientX, e.clientY, node.id);
+            }
+          : undefined,
     },
     [
       el(
@@ -174,6 +181,30 @@ function renderParseErrorsModal(store: Store): HTMLElement {
       el("div", { class: "modal-body" }, groups),
     ]),
   ]);
+}
+
+function renderTreeContextMenu(store: Store): HTMLElement | null {
+  const menu = store.state.treeContextMenu;
+  if (!menu) return null;
+  const node = store.findNode(store.activeTree(), menu.nodeId);
+
+  return el(
+    "div",
+    { class: "context-menu-overlay", onclick: () => store.closeTreeContextMenu(), oncontextmenu: (e: Event) => e.preventDefault() },
+    [
+      el(
+        "div",
+        { class: "context-menu", style: { left: menu.x + "px", top: menu.y + "px" }, onclick: (e: Event) => e.stopPropagation() },
+        [
+          el(
+            "button",
+            { class: "context-menu-item", onclick: () => store.openNodeInNewTab(menu.nodeId) },
+            [`Open "${node?.label ?? menu.nodeId}" in new tab`],
+          ),
+        ],
+      ),
+    ],
+  );
 }
 
 function renderCollapsedRail(store: Store): HTMLElement {
@@ -519,10 +550,13 @@ export function renderApp(store: Store): HTMLElement {
   bodyChildren.push(renderPaneGroup(store));
   const appBody = el("div", { class: "app-body" }, bodyChildren);
 
-  const showModal = store.state.parseErrorsOpen && store.state.parseErrors.length > 0;
-  if (!showModal) return appBody;
+  const overlays: HTMLElement[] = [];
+  if (store.state.parseErrorsOpen && store.state.parseErrors.length > 0) overlays.push(renderParseErrorsModal(store));
+  const contextMenu = renderTreeContextMenu(store);
+  if (contextMenu) overlays.push(contextMenu);
+  if (overlays.length === 0) return appBody;
 
-  // Wrapped in a `display: contents` div so the fixed-position modal sits
+  // Wrapped in a `display: contents` div so fixed-position overlays sit
   // alongside `.app-body` without becoming a flex child of `#app` itself.
-  return el("div", { style: { display: "contents" } }, [appBody, renderParseErrorsModal(store)]);
+  return el("div", { style: { display: "contents" } }, [appBody, ...overlays]);
 }
