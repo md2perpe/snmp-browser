@@ -92,4 +92,6 @@ export interface AppState {
   leftCollapsed: boolean;
   panes: PaneState[];
   activePaneId: string;
+  /** Right-click context menu on a tree node; null when closed. */
+  treeContextMenu: { x: number; y: number; nodeId: string } | null;
 }

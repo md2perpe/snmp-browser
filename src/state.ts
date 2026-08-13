@@ -32,6 +32,7 @@ export class Store {
         { id: "p2", width: null, activeTabId: null, tabs: [] },
       ],
       activePaneId: "p1",
+      treeContextMenu: null,
     };
   }
 
@@ -128,9 +129,19 @@ export class Store {
   }
 
   addTabToPane(paneId: string) {
+    this.pushNewTab(paneId, "h1");
+  }
+
+  /** Opens a new tab in the active pane with the given tree node (e.g. a table) pre-selected. */
+  openNodeInNewTab(nodeId: string) {
+    this.pushNewTab(this.state.activePaneId, "h1", { selectedNode: nodeId });
+    this.closeTreeContextMenu();
+  }
+
+  private pushNewTab(paneId: string, defaultHostId: string, opts: Partial<TabState> = {}) {
     const pane = this.getPane(paneId);
     if (!pane) return;
-    const tab = this.makeTab("tab" + Date.now(), "h1");
+    const tab = this.makeTab("tab" + Date.now(), defaultHostId, opts);
     pane.tabs.push(tab);
     pane.activeTabId = tab.id;
     if (tab.autoRefresh) this.startAutoRefresh(paneId, tab.id);
@@ -211,6 +222,16 @@ export class Store {
   selectNode(paneId: string, node: MibNode) {
     this.updateActiveTabInPane(paneId, { selectedNode: node.id });
     if (node.children) this.toggleExpand(node.id);
+  }
+
+  openTreeContextMenu(x: number, y: number, nodeId: string) {
+    this.state.treeContextMenu = { x, y, nodeId };
+    this.notify();
+  }
+
+  closeTreeContextMenu() {
+    this.state.treeContextMenu = null;
+    this.notify();
   }
 
   async loadMibTree() {

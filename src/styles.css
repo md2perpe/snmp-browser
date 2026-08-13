@@ -330,6 +330,43 @@ button {
   font-size: 10px;
 }
 
+/* ---------- Context menu ---------- */
+
+.context-menu-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+}
+.context-menu {
+  position: fixed;
+  min-width: 160px;
+  background: var(--bg-sidebar);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+  padding: 4px;
+}
+.context-menu-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font-family: inherit;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  padding: 7px 10px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.context-menu-item:hover {
+  background: var(--accent-hover);
+  color: var(--text-primary);
+}
+
 .tree-mode-box {
   flex: none;
   padding: 10px 14px;
