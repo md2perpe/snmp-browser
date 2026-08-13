@@ -7,6 +7,7 @@ type Patch<T> = Partial<T> | ((t: T) => Partial<T>);
 const AUTO_REFRESH_INTERVAL_MS = 10_000;
 /** Diffable field ("Index") every fetched row carries, used as its stable identity across fetches. */
 const ROW_KEY_FIELD = "Index";
+const DEFAULT_SNMP_PORT = "161";
 
 export class Store {
   state: AppState;
@@ -62,7 +63,7 @@ export class Store {
       id,
       hostId: h?.id ?? "",
       hostAddr: h?.addr ?? "",
-      hostPort: h?.port ?? "",
+      hostPort: h?.port ?? DEFAULT_SNMP_PORT,
       version: "v2c",
       community: h?.community ?? "",
       v3User: h?.v3User ?? "",
