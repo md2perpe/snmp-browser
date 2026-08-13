@@ -8,6 +8,7 @@ const AUTO_REFRESH_INTERVAL_MS = 10_000;
 /** Diffable field ("Index") every fetched row carries, used as its stable identity across fetches. */
 const ROW_KEY_FIELD = "Index";
 const DEFAULT_SNMP_PORT = "161";
+const DEFAULT_SNMP_COMMUNITY = "public";
 
 export class Store {
   state: AppState;
@@ -65,7 +66,7 @@ export class Store {
       hostAddr: h?.addr ?? "",
       hostPort: h?.port ?? DEFAULT_SNMP_PORT,
       version: "v2c",
-      community: h?.community ?? "",
+      community: h?.community ?? DEFAULT_SNMP_COMMUNITY,
       v3User: h?.v3User ?? "",
       v3Auth: "",
       v3Priv: "",
