@@ -36,13 +36,14 @@ function renderTreeRow(store: Store, node: MibNode, depth: number, selectedNodeI
       "data-node-id": node.id,
       style: { paddingLeft: depth * 16 + 2 + "px", opacity: node.resolved ? "1" : "0.45" },
       onclick: () => {
-        store.selectNode(store.state.activePaneId, node);
-        // selectNode's notify() rebuilds the whole tree synchronously (see
+        store.selectTreeNode(node);
+        // selectTreeNode's notify() rebuilds the whole tree synchronously (see
         // renderPreservingFocus), which resets .tree's scrollTop to 0 - scroll
         // the clicked row back into view at the top instead of leaving `iso`
         // pinned there.
         document.querySelector(`.tree-row[data-node-id="${cssEscape(node.id)}"]`)?.scrollIntoView({ block: "start" });
       },
+      ondblclick: () => store.openNodeInActiveTab(store.state.activePaneId, node),
       oncontextmenu:
         node.type === "table"
           ? (e: MouseEvent) => {
@@ -79,7 +80,7 @@ function renderTreeRow(store: Store, node: MibNode, depth: number, selectedNodeI
 }
 
 function renderSidebar(store: Store): HTMLElement {
-  const selectedNodeId = store.getActiveTab()?.selectedNode ?? "";
+  const selectedNodeId = store.state.selectedTreeNodeId;
   const visibleNodes = store.getVisibleNodes();
   const errors = store.state.parseErrors;
 

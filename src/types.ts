@@ -81,6 +81,8 @@ export interface PaneState {
 
 export interface AppState {
   expanded: Record<string, boolean>;
+  /** Id of the tree row highlighted by a single click; independent of any tab's `selectedNode` (which a double-click sets). */
+  selectedTreeNodeId: string;
   /** When true, the sidebar shows only tables (as roots) with their columns as children, instead of the full group hierarchy. */
   tablesOnlyMode: boolean;
   mibDirs: string[];
