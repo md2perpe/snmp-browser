@@ -220,7 +220,6 @@ export class Store {
 
   selectNode(paneId: string, node: MibNode) {
     this.updateActiveTabInPane(paneId, { selectedNode: node.id });
-    if (node.children) this.toggleExpand(node.id);
   }
 
   openTreeContextMenu(x: number, y: number, nodeId: string) {
