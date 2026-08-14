@@ -61,6 +61,12 @@ function renderTreeRow(store: Store, node: MibNode, depth: number, selectedNodeI
             {
               class: "tree-caret",
               style: { visibility: caretVisible ? "visible" : "hidden", transform: `rotate(${caretVisible && expanded ? 90 : 0}deg)` },
+              onclick: caretVisible
+                ? (e: MouseEvent) => {
+                    e.stopPropagation();
+                    store.toggleExpand(node.id);
+                  }
+                : undefined,
             },
             ["▶"],
           ),
