@@ -22,6 +22,7 @@ export class Store {
   constructor() {
     this.state = {
       expanded: {},
+      selectedTreeNodeId: "",
       tablesOnlyMode: false,
       mibDirs: [],
       mibDirDraft: null,
@@ -218,7 +219,13 @@ export class Store {
     this.notify();
   }
 
-  selectNode(paneId: string, node: MibNode) {
+  selectTreeNode(node: MibNode) {
+    this.state.selectedTreeNodeId = node.id;
+    this.notify();
+  }
+
+  openNodeInActiveTab(paneId: string, node: MibNode) {
+    this.state.selectedTreeNodeId = node.id;
     this.updateActiveTabInPane(paneId, { selectedNode: node.id });
   }
 
