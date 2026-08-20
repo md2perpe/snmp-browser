@@ -24,6 +24,7 @@ export class Store {
       expanded: {},
       selectedTreeNodeId: "",
       tablesOnlyMode: false,
+      humanReadableColumns: false,
       mibDirs: [],
       mibDirDraft: null,
       parseErrors: [],
@@ -134,6 +135,7 @@ export class Store {
 
   /** Opens a new tab in the active pane with the given tree node (e.g. a table) pre-selected. */
   openNodeInNewTab(nodeId: string) {
+    this.state.selectedTreeNodeId = nodeId;
     this.pushNewTab(this.state.activePaneId, "h1", { selectedNode: nodeId });
     this.closeTreeContextMenu();
   }
@@ -219,14 +221,14 @@ export class Store {
     this.notify();
   }
 
-  selectTreeNode(node: MibNode) {
-    this.state.selectedTreeNodeId = node.id;
+  toggleHumanReadableColumns() {
+    this.state.humanReadableColumns = !this.state.humanReadableColumns;
     this.notify();
   }
 
-  openNodeInActiveTab(paneId: string, node: MibNode) {
+  selectTreeNode(node: MibNode) {
     this.state.selectedTreeNodeId = node.id;
-    this.updateActiveTabInPane(paneId, { selectedNode: node.id });
+    this.notify();
   }
 
   openTreeContextMenu(x: number, y: number, nodeId: string) {
@@ -317,17 +319,6 @@ export class Store {
       }
     }
     return null;
-  }
-
-  // ---------- host / connection fields ----------
-
-  selectHost(paneId: string, hostId: string) {
-    const h = this.hostProfiles.find((p) => p.id === hostId);
-    if (h) {
-      this.updateActiveTabInPane(paneId, { hostId, hostAddr: h.addr, hostPort: h.port, community: h.community, v3User: h.v3User });
-    } else {
-      this.updateActiveTabInPane(paneId, { hostId });
-    }
   }
 
   setVersion(paneId: string, version: SnmpVersion) {

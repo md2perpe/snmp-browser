@@ -24,14 +24,7 @@ pub struct Settings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings {
-            mib_dirs: Vec::new(),
-            host_profiles: vec![
-                HostProfile { id: "h1".into(), label: "core-switch-01".into(), addr: "10.0.1.5".into(), port: "161".into(), community: "public".into(), v3_user: "admin".into() },
-                HostProfile { id: "h2".into(), label: "edge-router-02".into(), addr: "10.0.2.14".into(), port: "161".into(), community: "public".into(), v3_user: "netops".into() },
-                HostProfile { id: "h3".into(), label: "dist-switch-03".into(), addr: "10.0.3.8".into(), port: "1161".into(), community: "private".into(), v3_user: "admin".into() },
-            ],
-        }
+        Settings { mib_dirs: Vec::new(), host_profiles: Vec::new() }
     }
 }
 

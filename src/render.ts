@@ -1,6 +1,11 @@
-import { cssEscape, el, startDrag } from "./dom";
+import { cssEscape, el, startDrag, svgIcon } from "./dom";
 import type { Store } from "./state";
 import type { MibNode, PaneState, Row, SnmpVersion, TabState } from "./types";
+
+/** Standard "sidebar" icon (rounded panel outline with a left-panel divider), used to toggle the sidebar. */
+function sidebarToggleIcon(): SVGSVGElement {
+  return svgIcon('<rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="3" x2="9" y2="21"/>');
+}
 
 function nodeIcon(node: MibNode): HTMLElement {
   const color = node.type === "table" ? "var(--icon-table)" : node.type === "scalar" ? "var(--icon-scalar)" : "var(--icon-group)";
@@ -43,7 +48,7 @@ function renderTreeRow(store: Store, node: MibNode, depth: number, selectedNodeI
         // pinned there.
         document.querySelector(`.tree-row[data-node-id="${cssEscape(node.id)}"]`)?.scrollIntoView({ block: "start" });
       },
-      ondblclick: () => store.openNodeInActiveTab(store.state.activePaneId, node),
+      ondblclick: () => store.openNodeInNewTab(node.id),
       oncontextmenu:
         node.type === "table"
           ? (e: MouseEvent) => {
@@ -124,7 +129,7 @@ function renderSidebar(store: Store): HTMLElement {
 
   return el("div", { class: "sidebar", style: { width: store.state.leftWidth + "px" } }, [
     el("div", { class: "sidebar-header" }, [
-      el("button", { class: "icon-btn", title: "Hide sidebar", onclick: () => store.toggleLeft() }, ["▤"]),
+      el("button", { class: "icon-btn", title: "Hide sidebar", onclick: () => store.toggleLeft() }, [sidebarToggleIcon()]),
     ]),
     el("div", { class: "mib-dirs" }, [
       el("div", { class: "mib-dirs-head" }, [
@@ -224,7 +229,7 @@ function renderTreeContextMenu(store: Store): HTMLElement | null {
 
 function renderCollapsedRail(store: Store): HTMLElement {
   return el("div", { class: "sidebar-rail" }, [
-    el("button", { class: "icon-btn", title: "Show sidebar", onclick: () => store.toggleLeft() }, ["▤"]),
+    el("button", { class: "icon-btn", title: "Show sidebar", onclick: () => store.toggleLeft() }, [sidebarToggleIcon()]),
   ]);
 }
 
@@ -236,7 +241,7 @@ function renderTabBar(store: Store, pane: PaneState): HTMLElement {
   const tabs = pane.tabs.map((tab) => {
     const active = tab.id === pane.activeTabId;
     const host = store.hostProfiles.find((h) => h.id === tab.hostId);
-    const label = (host ? host.label : tab.hostId) + " · " + tab.selectedNode;
+    const label = (host ? host.label : tab.hostAddr || "(no address)") + " · " + tab.selectedNode;
     return el(
       "div",
       {
@@ -300,22 +305,6 @@ function renderToolbar(store: Store, pane: PaneState, tab: TabState): HTMLElemen
   );
 
   const fields: HTMLElement[] = [
-    el("div", { class: "field" }, [
-      el("label", { class: "field-label" }, ["Host"]),
-      el(
-        "select",
-        {
-          class: "field-select",
-          value: tab.hostId,
-          "data-focus-key": `pane:${pane.id}:host`,
-          onchange: (e: Event) => store.selectHost(pane.id, (e.target as HTMLSelectElement).value),
-        },
-        [
-          ...store.hostProfiles.map((h) => el("option", { value: h.id }, [h.label])),
-          el("option", { value: "__new" }, ["+ New host…"]),
-        ],
-      ),
-    ]),
     el("div", { class: "field" }, [
       el("label", { class: "field-label" }, ["Address"]),
       el("input", {
@@ -436,8 +425,12 @@ function renderTableToolbar(store: Store, pane: PaneState, tab: TabState): HTMLE
       "Auto-refresh (10s)",
     ]),
   );
-  children.push(el("button", { class: "export-btn" }, ["Export…"]));
-
+  children.push(
+    el("label", { class: "toggle-label", title: "Show column headers as e.g. \"Local Hostname\" instead of the raw MIB identifier", onclick: () => store.toggleHumanReadableColumns() }, [
+      el("div", { class: "toggle-track" + (store.state.humanReadableColumns ? " on" : "") }, [el("div", { class: "toggle-knob" })]),
+      "Readable names",
+    ]),
+  );
   return el("div", { class: "table-toolbar" }, children);
 }
 
@@ -447,6 +440,50 @@ function statusColor(value: string): string | null {
   if (v === "up" || v.startsWith("up(")) return "var(--green)";
   if (v === "down" || v.startsWith("down(")) return "var(--red)";
   return null;
+}
+
+/** Splits a MIB identifier into its camelCase/acronym/underscore-delimited words, e.g. "dcpLinkviewIPAddress" -> ["dcp", "Linkview", "IP", "Address"]. */
+function splitIdentifierWords(name: string): string[] {
+  return name
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
+    .split(/[\s_]+/)
+    .filter(Boolean);
+}
+
+function capitalizeWord(word: string): string {
+  if (word === word.toUpperCase()) return word; // keep acronyms (e.g. "IP") as-is
+  return word[0].toUpperCase() + word.slice(1);
+}
+
+/**
+ * Maps each raw column name to a human-readable label: the word-sequence prefix shared by
+ * every multi-word column (typically the table name, e.g. "dcpLinkview") is stripped, then
+ * the remaining words are title-cased, e.g. "dcpLinkviewLocalHostname" -> "Local Hostname".
+ */
+function humanizeColumnNames(cols: string[]): Record<string, string> {
+  const wordLists = cols.map(splitIdentifierWords);
+  const multiWordLists = wordLists.filter((w) => w.length > 1);
+
+  let prefixLen = 0;
+  if (multiWordLists.length > 1) {
+    const minLen = Math.min(...multiWordLists.map((w) => w.length));
+    outer: for (let i = 0; i < minLen - 1; i++) {
+      const word = multiWordLists[0][i].toLowerCase();
+      for (const words of multiWordLists) {
+        if (words[i].toLowerCase() !== word) break outer;
+      }
+      prefixLen++;
+    }
+  }
+
+  const labels: Record<string, string> = {};
+  cols.forEach((col, i) => {
+    const words = wordLists[i];
+    const kept = words.length > 1 ? words.slice(Math.min(prefixLen, words.length - 1)) : words;
+    labels[col] = kept.map(capitalizeWord).join(" ");
+  });
+  return labels;
 }
 
 function renderCell(colKey: string, row: Row, changed: boolean): HTMLTableCellElement {
@@ -466,15 +503,17 @@ function renderTable(store: Store, pane: PaneState, tab: TabState): HTMLElement 
     return el("div", { class: "table-scroll" }, [el("div", { class: "table-empty" }, [tab.fetchError ?? "No data yet - click Fetch."])]);
   }
 
+  const columnLabels = store.state.humanReadableColumns ? humanizeColumnNames(tab.columns) : null;
+
   const headRow = el(
     "tr",
     {},
     tab.columns.map((col) => {
       const startWidth = store.colWidth(tab, col);
       const sorted = tab.sortCol === col;
-      return el("th", { style: { width: startWidth + "px" } }, [
+      return el("th", { style: { width: startWidth + "px" }, title: col }, [
         el("div", { class: "th-btn" + (sorted ? " sorted" : ""), onclick: () => store.setSortCol(pane.id, col) }, [
-          col,
+          columnLabels ? columnLabels[col] : col,
           sorted ? el("span", { style: { fontSize: "9px" } }, [tab.sortDir === 1 ? "▲" : "▼"]) : null,
         ]),
         el("div", {
@@ -519,10 +558,9 @@ function renderStatusBar(tab: TabState): HTMLElement {
   ]);
 }
 
-function renderEmptyPane(store: Store, pane: PaneState): HTMLElement {
+function renderEmptyPane(): HTMLElement {
   return el("div", { class: "pane-empty" }, [
-    el("div", { class: "pane-empty-text" }, ["No tab open"]),
-    el("button", { class: "pane-empty-btn", onclick: () => store.addTabToPane(pane.id) }, ["+ Open a tab"]),
+    el("div", { class: "pane-empty-text" }, ["No tab open - double-click a node in the sidebar to open it"]),
   ]);
 }
 
@@ -531,7 +569,7 @@ function renderPane(store: Store, pane: PaneState, isLast: boolean): HTMLElement
   const flexCss = isLast ? "1 1 0%" : `0 0 ${pane.width}px`;
   const body = tab
     ? [renderToolbar(store, pane, tab), renderTableToolbar(store, pane, tab), renderTable(store, pane, tab), renderStatusBar(tab)]
-    : [renderEmptyPane(store, pane)];
+    : [renderEmptyPane()];
   return el(
     "div",
     { class: "pane", style: { flex: flexCss }, onclick: () => store.focusPane(pane.id) },
