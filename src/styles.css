@@ -672,21 +672,43 @@ button {
   flex: 1;
 }
 
-.fetch-btn {
+.split-btn {
+  display: flex;
   height: 32px;
+  border-radius: 7px;
+  overflow: hidden;
+  align-self: flex-end;
+}
+.split-btn-main {
   padding: 0 18px;
   background: var(--accent);
   border: none;
-  border-radius: 7px;
   color: #fff;
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
-  align-self: flex-end;
 }
-.fetch-btn:disabled {
+.split-btn-main:disabled {
   opacity: 0.6;
   cursor: default;
+}
+.split-btn-toggle {
+  width: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.18);
+  border: none;
+  border-left: 1px solid rgba(255, 255, 255, 0.2);
+  color: rgba(255, 255, 255, 0.65);
+  cursor: pointer;
+}
+.split-btn-toggle:hover {
+  color: #fff;
+}
+.split-btn-toggle.on {
+  background: rgba(52, 211, 153, 0.28);
+  color: var(--green);
 }
 
 .table-toolbar {

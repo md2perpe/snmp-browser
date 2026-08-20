@@ -7,6 +7,13 @@ function sidebarToggleIcon(): SVGSVGElement {
   return svgIcon('<rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="3" x2="9" y2="21"/>');
 }
 
+/** Standard "refresh" icon (two circular arrows), used for the auto-refresh toggle. */
+function autoRefreshIcon(): SVGSVGElement {
+  return svgIcon(
+    '<path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 21v-5h5"/>',
+  );
+}
+
 function nodeIcon(node: MibNode): HTMLElement {
   const color = node.type === "table" ? "var(--icon-table)" : node.type === "scalar" ? "var(--icon-scalar)" : "var(--icon-group)";
   if (node.type === "group") {
@@ -379,16 +386,27 @@ function renderToolbar(store: Store, pane: PaneState, tab: TabState): HTMLElemen
 
   fields.push(el("div", { class: "spacer" }));
   fields.push(
-    el(
-      "button",
-      {
-        class: "fetch-btn",
-        disabled: !canFetch,
-        title: canFetch ? "" : "Select a resolvable scalar or table in the tree first",
-        onclick: () => store.manualFetch(pane.id),
-      },
-      ["Fetch"],
-    ),
+    el("div", { class: "split-btn" }, [
+      el(
+        "button",
+        {
+          class: "split-btn-main",
+          disabled: !canFetch,
+          title: canFetch ? "" : "Select a resolvable scalar or table in the tree first",
+          onclick: () => store.manualFetch(pane.id),
+        },
+        ["Fetch"],
+      ),
+      el(
+        "button",
+        {
+          class: "split-btn-toggle" + (tab.autoRefresh ? " on" : ""),
+          title: tab.autoRefresh ? "Auto-refresh every 10s (on) - click to turn off" : "Auto-refresh every 10s (off) - click to turn on",
+          onclick: () => store.toggleAutoRefresh(pane.id),
+        },
+        [autoRefreshIcon()],
+      ),
+    ]),
   );
 
   return el("div", { class: "toolbar" }, [el("div", { class: "toolbar-row" }, fields)]);
@@ -417,12 +435,6 @@ function renderTableToolbar(store: Store, pane: PaneState, tab: TabState): HTMLE
     el("label", { class: "toggle-label", onclick: () => store.toggleDiffMode(pane.id) }, [
       el("div", { class: "toggle-track" + (tab.diffMode ? " on" : "") }, [el("div", { class: "toggle-knob" })]),
       "Diff mode",
-    ]),
-  );
-  children.push(
-    el("label", { class: "toggle-label", onclick: () => store.toggleAutoRefresh(pane.id) }, [
-      el("div", { class: "toggle-track" + (tab.autoRefresh ? " on" : "") }, [el("div", { class: "toggle-knob" })]),
-      "Auto-refresh (10s)",
     ]),
   );
   children.push(
