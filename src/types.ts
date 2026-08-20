@@ -85,6 +85,8 @@ export interface AppState {
   selectedTreeNodeId: string;
   /** When true, the sidebar shows only tables (as roots) with their columns as children, instead of the full group hierarchy. */
   tablesOnlyMode: boolean;
+  /** When true, table column headers show a humanized form (shared prefix stripped, camelCase split into title-cased words) instead of the raw MIB identifier. */
+  humanReadableColumns: boolean;
   mibDirs: string[];
   /** Inline text-entry draft for adding a MIB directory outside Tauri (no native picker there); null when not editing. */
   mibDirDraft: string | null;

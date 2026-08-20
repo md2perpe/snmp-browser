@@ -105,6 +105,9 @@ struct RawSymbol {
     /// Set when SYNTAX is `SEQUENCE OF X` - X is the entry type name.
     sequence_of_target: Option<String>,
     enum_values: Vec<(i64, String)>,
+    /// MAX-ACCESS not-accessible (e.g. a table's INDEX column) - such objects are never
+    /// returned by the agent, not even during a table walk, so they can't be fetched.
+    not_accessible: bool,
     /// Path of the file this symbol was declared in, for grouping error messages.
     file: String,
 }
@@ -212,6 +215,7 @@ fn walk_module(root: Node, src: &[u8], file: &str, raw: &mut Vec<RawSymbol>, seq
                     kind: RawKind::Group,
                     sequence_of_target: None,
                     enum_values: vec![],
+                    not_accessible: false,
                     file: file.to_string(),
                 });
             }
@@ -241,12 +245,17 @@ fn walk_module(root: Node, src: &[u8], file: &str, raw: &mut Vec<RawSymbol>, seq
                     }
                 }
 
+                let not_accessible = clauses
+                    .child_by_field_name("max_access")
+                    .is_some_and(|n| node_text(n, src).contains("not-accessible"));
+
                 raw.push(RawSymbol {
                     name: node_text(name_node, src).to_string(),
                     oid: parse_oid_value(oid_node, src),
                     kind,
                     sequence_of_target,
                     enum_values,
+                    not_accessible,
                     file: file.to_string(),
                 });
             }
@@ -263,6 +272,7 @@ fn walk_module(root: Node, src: &[u8], file: &str, raw: &mut Vec<RawSymbol>, seq
                         kind: RawKind::Other,
                         sequence_of_target: None,
                         enum_values: vec![],
+                        not_accessible: false,
                         file: file.to_string(),
                     });
                 }
@@ -508,6 +518,11 @@ fn build_tables(raw: &[RawSymbol], sequence_types: &HashMap<String, Vec<String>>
 
         let columns = field_names
             .iter()
+            // A not-accessible column (typically the table's INDEX column) is never
+            // returned by the agent, even during a table walk - its value is only
+            // ever visible in the synthetic "Index" column, so skip it here rather
+            // than showing an always-empty duplicate.
+            .filter(|field_name| !by_name.get(field_name.as_str()).is_some_and(|c| c.not_accessible))
             .map(|field_name| {
                 let col = by_name.get(field_name.as_str());
                 ColumnInfo {
@@ -712,6 +727,58 @@ END
         assert_eq!(if_descr.arc, Some(2));
         let if_oper = table.columns.iter().find(|c| c.name == "ifOperStatus").unwrap();
         assert_eq!(if_oper.enum_values, vec![(1, "up".to_string()), (2, "down".to_string()), (3, "testing".to_string())]);
+    }
+
+    #[test]
+    fn not_accessible_columns_are_excluded_from_the_fetchable_table_columns() {
+        const MIB: &str = r#"
+TEST-MIB DEFINITIONS ::= BEGIN
+
+mib-2 OBJECT IDENTIFIER ::= { 1 3 6 1 2 1 }
+dcpLinkview OBJECT IDENTIFIER ::= { mib-2 99 }
+
+dcpLinkviewTable OBJECT-TYPE
+    SYNTAX SEQUENCE OF DcpLinkviewEntry
+    MAX-ACCESS not-accessible
+    STATUS current
+    DESCRIPTION "t"
+    ::= { dcpLinkview 1 }
+
+dcpLinkviewEntry OBJECT-TYPE
+    SYNTAX DcpLinkviewEntry
+    MAX-ACCESS not-accessible
+    STATUS current
+    DESCRIPTION "e"
+    INDEX { dcpLinkviewIndex }
+    ::= { dcpLinkviewTable 1 }
+
+DcpLinkviewEntry ::= SEQUENCE {
+    dcpLinkviewIndex INTEGER,
+    dcpLinkviewLocalHostname OCTET STRING
+}
+
+dcpLinkviewIndex OBJECT-TYPE
+    SYNTAX INTEGER
+    MAX-ACCESS not-accessible
+    STATUS current
+    DESCRIPTION "i"
+    ::= { dcpLinkviewEntry 1 }
+
+dcpLinkviewLocalHostname OBJECT-TYPE
+    SYNTAX OCTET STRING
+    MAX-ACCESS read-only
+    STATUS current
+    DESCRIPTION "h"
+    ::= { dcpLinkviewEntry 2 }
+
+END
+"#;
+        let dir = write_fixture(MIB);
+        let result = parse_directories(&[dir.path().to_string_lossy().to_string()]);
+
+        let table = result.tables.get("dcpLinkviewTable").expect("dcpLinkviewTable definition");
+        let names: Vec<&str> = table.columns.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, vec!["dcpLinkviewLocalHostname"], "not-accessible dcpLinkviewIndex should be excluded - its value is never returned by a table walk");
     }
 
     /// Locks down the wire shape the TypeScript frontend actually deserializes:

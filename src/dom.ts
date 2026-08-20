@@ -38,6 +38,21 @@ export function el<K extends keyof HTMLElementTagNameMap>(
   return node;
 }
 
+/** A small stroke-based (Lucide/Feather-style) icon, sized to sit inside a 24px icon button. */
+export function svgIcon(inner: string, viewBox = "0 0 24 24"): SVGSVGElement {
+  const node = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  node.setAttribute("viewBox", viewBox);
+  node.setAttribute("width", "16");
+  node.setAttribute("height", "16");
+  node.setAttribute("fill", "none");
+  node.setAttribute("stroke", "currentColor");
+  node.setAttribute("stroke-width", "2");
+  node.setAttribute("stroke-linecap", "round");
+  node.setAttribute("stroke-linejoin", "round");
+  node.innerHTML = inner;
+  return node;
+}
+
 export function cssEscape(s: string): string {
   return typeof CSS !== "undefined" && CSS.escape ? CSS.escape(s) : s.replace(/[^a-zA-Z0-9_-]/g, "\\$&");
 }
@@ -56,9 +71,11 @@ export function renderPreservingFocus(root: HTMLElement, build: () => Node) {
   let focusKey: string | null = null;
   let selStart: number | null = null;
   let selEnd: number | null = null;
+  let reusableInput: HTMLInputElement | null = null;
   if (active instanceof HTMLElement && root.contains(active)) {
     focusKey = active.getAttribute("data-focus-key");
     if (active instanceof HTMLInputElement) {
+      reusableInput = active;
       try {
         selStart = active.selectionStart;
         selEnd = active.selectionEnd;
@@ -73,9 +90,37 @@ export function renderPreservingFocus(root: HTMLElement, build: () => Node) {
     scrollPositions.set(el.getAttribute("data-preserve-scroll")!, el.scrollTop);
   });
 
-  root.replaceChildren(build());
+  const next = build();
 
-  if (focusKey) {
+  // The app re-renders its whole tree on every keystroke (each oninput handler
+  // writes to the store, which synchronously rebuilds everything), which would
+  // normally replace the focused <input> with a freshly-built one and wipe its
+  // native undo/redo history. Splice the still-live, already-focused DOM node
+  // back in for its freshly-built counterpart so that history survives - its
+  // value already matches state (it's what the keystroke just wrote there), so
+  // nothing else needs to be copied over. Only possible when the input carries
+  // a focus key, since that's how its freshly-built counterpart is found.
+  let spliced = false;
+  if (focusKey && reusableInput && next instanceof Element) {
+    const fresh = next.querySelector(`[data-focus-key="${cssEscape(focusKey)}"]`);
+    if (fresh instanceof HTMLInputElement && fresh.type === reusableInput.type) {
+      fresh.replaceWith(reusableInput);
+      spliced = true;
+    }
+  }
+
+  root.replaceChildren(next);
+
+  if (spliced && reusableInput) {
+    reusableInput.focus();
+    if (selStart != null) {
+      try {
+        reusableInput.setSelectionRange(selStart, selEnd ?? selStart);
+      } catch {
+        // ignore
+      }
+    }
+  } else if (focusKey) {
     const found = root.querySelector(`[data-focus-key="${cssEscape(focusKey)}"]`);
     if (found instanceof HTMLElement) {
       found.focus();
