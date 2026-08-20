@@ -98,4 +98,6 @@ export interface AppState {
   activePaneId: string;
   /** Right-click context menu on a tree node; null when closed. */
   treeContextMenu: { x: number; y: number; nodeId: string } | null;
+  /** Fetch mode dropdown (manual vs. auto-refresh) for a pane's split button; null when closed. */
+  refreshMenu: { paneId: string; x: number; y: number } | null;
 }

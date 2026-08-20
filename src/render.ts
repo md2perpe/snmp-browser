@@ -7,10 +7,21 @@ function sidebarToggleIcon(): SVGSVGElement {
   return svgIcon('<rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="3" x2="9" y2="21"/>');
 }
 
-/** Standard "refresh" icon (two circular arrows), used for the auto-refresh toggle. */
-function autoRefreshIcon(): SVGSVGElement {
+/** Standard "chevron down" icon, used for the fetch-mode dropdown trigger. */
+function chevronDownIcon(): SVGSVGElement {
+  return svgIcon('<path d="M6 9l6 6 6-6"/>');
+}
+
+const AUTO_REFRESH_RING_RADIUS = 9;
+const AUTO_REFRESH_RING_CIRCUMFERENCE = 2 * Math.PI * AUTO_REFRESH_RING_RADIUS;
+
+/** Pie-chart-style countdown ring showing time left until the next auto-refresh fetch; drains clockwise as time passes. */
+function autoRefreshRingIcon(fraction: number): SVGSVGElement {
+  const offset = AUTO_REFRESH_RING_CIRCUMFERENCE * (1 - fraction);
   return svgIcon(
-    '<path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 21v-5h5"/>',
+    `<circle cx="12" cy="12" r="${AUTO_REFRESH_RING_RADIUS}" fill="none" stroke="rgba(255,255,255,0.25)" stroke-width="3"/>` +
+      `<circle cx="12" cy="12" r="${AUTO_REFRESH_RING_RADIUS}" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" ` +
+      `stroke-dasharray="${AUTO_REFRESH_RING_CIRCUMFERENCE}" stroke-dashoffset="${offset}" transform="rotate(-90 12 12)"/>`,
   );
 }
 
@@ -234,6 +245,35 @@ function renderTreeContextMenu(store: Store): HTMLElement | null {
   );
 }
 
+function renderRefreshMenu(store: Store): HTMLElement | null {
+  const menu = store.state.refreshMenu;
+  if (!menu) return null;
+  const pane = store.getPane(menu.paneId);
+  const tab = pane && store.getPaneActiveTab(pane);
+  if (!pane || !tab) return null;
+
+  const item = (label: string, active: boolean, onclick: () => void) =>
+    el("button", { class: "context-menu-item" + (active ? " active" : ""), onclick }, [
+      el("span", { class: "context-menu-check" }, [active ? "✓" : ""]),
+      label,
+    ]);
+
+  return el(
+    "div",
+    { class: "context-menu-overlay", onclick: () => store.closeRefreshMenu(), oncontextmenu: (e: Event) => e.preventDefault() },
+    [
+      el(
+        "div",
+        { class: "context-menu", style: { left: menu.x + "px", top: menu.y + "px" }, onclick: (e: Event) => e.stopPropagation() },
+        [
+          item("Manual", !tab.autoRefresh, () => store.setAutoRefresh(pane.id, false)),
+          item("Auto-refresh (10s)", tab.autoRefresh, () => store.setAutoRefresh(pane.id, true)),
+        ],
+      ),
+    ],
+  );
+}
+
 function renderCollapsedRail(store: Store): HTMLElement {
   return el("div", { class: "sidebar-rail" }, [
     el("button", { class: "icon-btn", title: "Show sidebar", onclick: () => store.toggleLeft() }, [sidebarToggleIcon()]),
@@ -401,10 +441,13 @@ function renderToolbar(store: Store, pane: PaneState, tab: TabState): HTMLElemen
         "button",
         {
           class: "split-btn-toggle" + (tab.autoRefresh ? " on" : ""),
-          title: tab.autoRefresh ? "Auto-refresh every 10s (on) - click to turn off" : "Auto-refresh every 10s (off) - click to turn on",
-          onclick: () => store.toggleAutoRefresh(pane.id),
+          title: tab.autoRefresh ? "Auto-refresh every 10s - click to choose fetch mode" : "Manual fetch - click to choose fetch mode",
+          onclick: (e: MouseEvent) => {
+            const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+            store.toggleRefreshMenu(pane.id, rect.right - 172, rect.bottom + 4);
+          },
         },
-        [autoRefreshIcon()],
+        [tab.autoRefresh ? autoRefreshRingIcon(store.autoRefreshFraction(tab.id) ?? 1) : chevronDownIcon()],
       ),
     ]),
   );
@@ -619,6 +662,8 @@ export function renderApp(store: Store): HTMLElement {
   if (store.state.parseErrorsOpen && store.state.parseErrors.length > 0) overlays.push(renderParseErrorsModal(store));
   const contextMenu = renderTreeContextMenu(store);
   if (contextMenu) overlays.push(contextMenu);
+  const refreshMenu = renderRefreshMenu(store);
+  if (refreshMenu) overlays.push(refreshMenu);
   if (overlays.length === 0) return appBody;
 
   // Wrapped in a `display: contents` div so fixed-position overlays sit

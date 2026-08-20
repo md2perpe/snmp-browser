@@ -366,6 +366,15 @@ button {
   background: var(--accent-hover);
   color: var(--text-primary);
 }
+.context-menu-item.active {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+.context-menu-check {
+  display: inline-block;
+  width: 16px;
+  color: var(--green);
+}
 
 .tree-mode-box {
   flex: none;

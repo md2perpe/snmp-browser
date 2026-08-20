@@ -18,6 +18,10 @@ export class Store {
 
   private listeners: Array<() => void> = [];
   private autoRefreshTimers = new Map<string, ReturnType<typeof setInterval>>();
+  /** Epoch ms of each auto-refreshing tab's next fetch, for the countdown ring. */
+  private autoRefreshNextAt = new Map<string, number>();
+  /** Ticks re-renders while any tab is auto-refreshing, so the countdown ring animates. */
+  private uiTickTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor() {
     this.state = {
@@ -34,6 +38,7 @@ export class Store {
       panes: [{ id: "p1", width: null, activeTabId: null, tabs: [] }],
       activePaneId: "p1",
       treeContextMenu: null,
+      refreshMenu: null,
     };
   }
 
@@ -74,7 +79,7 @@ export class Store {
       sortCol: ROW_KEY_FIELD,
       sortDir: 1,
       colWidths: {},
-      autoRefresh: true,
+      autoRefresh: false,
       lastFetch: "",
       diffMode: false,
       workingRows: [],
@@ -241,6 +246,16 @@ export class Store {
     this.notify();
   }
 
+  toggleRefreshMenu(paneId: string, x: number, y: number) {
+    this.state.refreshMenu = this.state.refreshMenu?.paneId === paneId ? null : { paneId, x, y };
+    this.notify();
+  }
+
+  closeRefreshMenu() {
+    this.state.refreshMenu = null;
+    this.notify();
+  }
+
   async loadMibTree() {
     const result = await invoke<ParseResult>("get_mib_tree");
     this.tree = result.tree;
@@ -370,21 +385,24 @@ export class Store {
     this.updateActiveTabInPane(paneId, (t) => ({ diffMode: !t.diffMode }));
   }
 
-  toggleAutoRefresh(paneId: string) {
+  setAutoRefresh(paneId: string, value: boolean) {
+    this.state.refreshMenu = null;
     const pane = this.getPane(paneId);
-    if (!pane) return;
-    const tab = this.getPaneActiveTab(pane);
-    if (!tab) return;
-    tab.autoRefresh = !tab.autoRefresh;
-    if (tab.autoRefresh) this.startAutoRefresh(paneId, tab.id);
-    else this.stopAutoRefresh(tab.id);
+    const tab = pane && this.getPaneActiveTab(pane);
+    if (tab && tab.autoRefresh !== value) {
+      tab.autoRefresh = value;
+      if (value) this.startAutoRefresh(paneId, tab.id);
+      else this.stopAutoRefresh(tab.id);
+    }
     this.notify();
   }
 
   private startAutoRefresh(paneId: string, tabId: string) {
     this.stopAutoRefresh(tabId);
+    this.autoRefreshNextAt.set(tabId, Date.now() + AUTO_REFRESH_INTERVAL_MS);
     const timer = setInterval(() => void this.fetchForTab(paneId, tabId), AUTO_REFRESH_INTERVAL_MS);
     this.autoRefreshTimers.set(tabId, timer);
+    if (!this.uiTickTimer) this.uiTickTimer = setInterval(() => this.notify(), 200);
   }
 
   private stopAutoRefresh(tabId: string) {
@@ -393,6 +411,18 @@ export class Store {
       clearInterval(timer);
       this.autoRefreshTimers.delete(tabId);
     }
+    this.autoRefreshNextAt.delete(tabId);
+    if (this.autoRefreshTimers.size === 0 && this.uiTickTimer) {
+      clearInterval(this.uiTickTimer);
+      this.uiTickTimer = null;
+    }
+  }
+
+  /** Fraction of the auto-refresh interval remaining before the next fetch (1 = just fetched, 0 = about to fetch); null when not auto-refreshing. */
+  autoRefreshFraction(tabId: string): number | null {
+    const nextAt = this.autoRefreshNextAt.get(tabId);
+    if (nextAt == null) return null;
+    return Math.max(0, Math.min(1, (nextAt - Date.now()) / AUTO_REFRESH_INTERVAL_MS));
   }
 
   private async fetchForTab(paneId: string, tabId: string) {
@@ -402,6 +432,7 @@ export class Store {
       this.stopAutoRefresh(tabId);
       return;
     }
+    this.autoRefreshNextAt.set(tabId, Date.now() + AUTO_REFRESH_INTERVAL_MS);
     await this.runFetch(tab);
     this.notify();
   }
