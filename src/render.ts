@@ -1,4 +1,4 @@
-import { cssEscape, el, startDrag, svgIcon } from "./dom";
+import { el, startDrag, svgIcon } from "./dom";
 import type { Store } from "./state";
 import type { MibNode, PaneState, Row, SnmpVersion, TabState } from "./types";
 
@@ -58,14 +58,7 @@ function renderTreeRow(store: Store, node: MibNode, depth: number, selectedNodeI
       title,
       "data-node-id": node.id,
       style: { paddingLeft: depth * 16 + 2 + "px", opacity: node.resolved ? "1" : "0.45" },
-      onclick: () => {
-        store.selectTreeNode(node);
-        // selectTreeNode's notify() rebuilds the whole tree synchronously (see
-        // renderPreservingFocus), which resets .tree's scrollTop to 0 - scroll
-        // the clicked row back into view at the top instead of leaving `iso`
-        // pinned there.
-        document.querySelector(`.tree-row[data-node-id="${cssEscape(node.id)}"]`)?.scrollIntoView({ block: "start" });
-      },
+      onclick: () => store.selectTreeNode(node),
       ondblclick: () => store.openNodeInNewTab(node.id),
       oncontextmenu:
         node.type === "table"
