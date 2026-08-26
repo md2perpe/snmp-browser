@@ -422,7 +422,12 @@ function renderToolbar(store: Store, pane: PaneState, tab: TabState): HTMLElemen
   }
 
   const selectedNode = store.findNode(store.activeTree(), tab.selectedNode);
-  const canFetch = store.canFetch(selectedNode);
+  const canFetch = store.canFetch(selectedNode) && store.hasCompleteConnection(tab);
+  const fetchDisabledReason = !store.canFetch(selectedNode)
+    ? "Select a resolvable scalar or table in the tree first"
+    : !store.hasCompleteConnection(tab)
+      ? "Fill in the host address, port, and " + (tab.version === "v3" ? "security user" : "community") + " first"
+      : "";
 
   fields.push(el("div", { class: "spacer" }));
   fields.push(
@@ -432,7 +437,7 @@ function renderToolbar(store: Store, pane: PaneState, tab: TabState): HTMLElemen
         {
           class: "split-btn-main",
           disabled: !canFetch,
-          title: canFetch ? "" : "Select a resolvable scalar or table in the tree first",
+          title: fetchDisabledReason,
           onclick: () => store.manualFetch(pane.id),
         },
         ["Fetch"],

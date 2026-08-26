@@ -379,6 +379,12 @@ export class Store {
     return !!node && node.type !== "group" && node.resolved;
   }
 
+  /** Whether a tab's connection fields are filled in enough to attempt a fetch. */
+  hasCompleteConnection(tab: TabState): boolean {
+    if (!tab.hostAddr.trim() || !tab.hostPort.trim() || !tab.version) return false;
+    return tab.version === "v3" ? !!tab.v3User.trim() : !!tab.community.trim();
+  }
+
   // ---------- diff mode / fetch ----------
 
   toggleDiffMode(paneId: string) {
@@ -451,6 +457,10 @@ export class Store {
     const node = this.findNode(this.activeTree(), tab.selectedNode);
     if (!this.canFetch(node)) {
       tab.fetchError = node ? `'${node.label}' can't be fetched` : "Select an OID first";
+      return;
+    }
+    if (!this.hasCompleteConnection(tab)) {
+      tab.fetchError = "Fill in the host address, port, and " + (tab.version === "v3" ? "security user" : "community") + " first";
       return;
     }
     try {
