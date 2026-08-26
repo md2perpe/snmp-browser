@@ -134,10 +134,6 @@ export class Store {
     this.notify();
   }
 
-  addTabToPane(paneId: string) {
-    this.pushNewTab(paneId, "h1");
-  }
-
   /** Opens a new tab in the active pane with the given tree node (e.g. a table) pre-selected. */
   openNodeInNewTab(nodeId: string) {
     this.state.selectedTreeNodeId = nodeId;
