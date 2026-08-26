@@ -120,6 +120,26 @@ fn push_error(errors: &mut Vec<FileErrors>, file: &str, msg: String) {
     }
 }
 
+/// Recursively collects every file under `dir` (including subdirectories),
+/// reporting any directory that can't be read as a parse error.
+fn collect_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>, errors: &mut Vec<FileErrors>) {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(e) => {
+            push_error(errors, &dir.display().to_string(), format!("{e}"));
+            return;
+        }
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_files(&path, out, errors);
+        } else if path.is_file() {
+            out.push(path);
+        }
+    }
+}
+
 pub fn parse_directories(dirs: &[String]) -> ParseResult {
     let mut parser = Parser::new();
     if parser.set_language(&tree_sitter_asn1::LANGUAGE.into()).is_err() {
@@ -134,18 +154,9 @@ pub fn parse_directories(dirs: &[String]) -> ParseResult {
     let mut errors: Vec<FileErrors> = Vec::new();
 
     for dir in dirs {
-        let entries = match std::fs::read_dir(dir) {
-            Ok(e) => e,
-            Err(e) => {
-                push_error(&mut errors, dir, format!("{e}"));
-                continue;
-            }
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if !path.is_file() {
-                continue;
-            }
+        let mut files = Vec::new();
+        collect_files(std::path::Path::new(dir), &mut files, &mut errors);
+        for path in files {
             let Ok(src) = std::fs::read_to_string(&path) else {
                 continue; // not a readable text file - skip silently
             };
@@ -611,6 +622,19 @@ END
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("TEST.mib"), contents).unwrap();
         dir
+    }
+
+    #[test]
+    fn mib_files_in_subdirectories_are_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let nested = dir.path().join("nested").join("deeper");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(nested.join("TEST.mib"), IF_TABLE_MIB).unwrap();
+
+        let result = parse_directories(&[dir.path().to_string_lossy().to_string()]);
+
+        let if_table = result.symbols.get("ifTable").expect("ifTable symbol should be found in a nested subdirectory");
+        assert!(if_table.resolved);
     }
 
     #[test]
