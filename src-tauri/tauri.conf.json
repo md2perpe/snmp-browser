@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "snmp-mib-client",
+  "productName": "SNMP MIB Client",
   "mainBinaryName": "snmp-mib-client",
   "version": "0.1.0",
   "identifier": "sh.perpe.snmp-mib-client",
