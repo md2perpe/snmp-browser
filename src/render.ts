@@ -317,7 +317,6 @@ function renderTabBar(store: Store, pane: PaneState): HTMLElement {
 
   const bar: (HTMLElement | null)[] = [
     ...tabs,
-    el("button", { class: "tab-add", onclick: () => store.addTabToPane(pane.id) }, ["+"]),
     el("div", { class: "tab-bar-spacer" }),
     canSplit ? el("button", { class: "pane-action", title: "Split right", onclick: () => store.splitPane(pane.id) }, ["⊟"]) : null,
     canClosePane ? el("button", { class: "pane-action", title: "Close group", onclick: () => store.closePane(pane.id) }, ["✕"]) : null,

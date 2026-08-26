@@ -83,7 +83,8 @@ Click the small chevron next to Fetch to choose the fetch mode:
 
 ## Working with tabs and panes
 
-- **+** in the tab bar opens a new, blank tab in that pane.
+- Double-clicking a node in the sidebar opens it in a new tab in the active
+  pane.
 - **×** on a tab closes it.
 - **⊟** splits the pane in two, side by side (up to two panes) — handy for
   comparing two tables, or the same table on two devices, at once.

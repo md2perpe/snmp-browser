@@ -551,7 +551,6 @@ button {
   cursor: pointer;
   padding: 0 2px;
 }
-.tab-add,
 .pane-action {
   border: none;
   background: transparent;
@@ -559,12 +558,6 @@ button {
   cursor: pointer;
   align-self: center;
   flex: none;
-}
-.tab-add {
-  font-size: 15px;
-  padding: 0 10px;
-}
-.pane-action {
   font-size: 13px;
   padding: 0 10px;
 }
