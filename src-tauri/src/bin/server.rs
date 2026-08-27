@@ -43,40 +43,95 @@ fn json_response(status: u16, body: &Value) -> Response<std::io::Cursor<Vec<u8>>
     response.with_header(Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap())
 }
 
+fn profiles_response(settings: &settings::Settings) -> Value {
+    json!({ "profiles": settings.mib_profiles, "activeProfileId": settings.active_mib_profile_id })
+}
+
 /// Mirrors the command dispatch in `lib.rs`'s `invoke_handler!`, minus the
 /// Tauri-specific plumbing.
 fn handle(state: &AppState, cmd: &str, args: &Value) -> Result<Value, (u16, String)> {
     match cmd {
-        "list_mib_dirs" => Ok(json!(state.settings.lock().unwrap().mib_dirs.clone())),
+        "list_mib_profiles" => Ok(profiles_response(&state.settings.lock().unwrap())),
+
+        "add_mib_profile" => {
+            let name = args.get("name").and_then(Value::as_str).ok_or((400, "missing 'name'".to_string()))?.to_string();
+            let resp = {
+                let mut s = state.settings.lock().unwrap();
+                s.add_mib_profile(name);
+                profiles_response(&s)
+            };
+            state.save();
+            Ok(resp)
+        }
+
+        "remove_mib_profile" => {
+            let id = args.get("id").and_then(Value::as_str).ok_or((400, "missing 'id'".to_string()))?.to_string();
+            let resp = {
+                let mut s = state.settings.lock().unwrap();
+                s.remove_mib_profile(&id);
+                profiles_response(&s)
+            };
+            state.save();
+            Ok(resp)
+        }
+
+        "rename_mib_profile" => {
+            let id = args.get("id").and_then(Value::as_str).ok_or((400, "missing 'id'".to_string()))?.to_string();
+            let name = args.get("name").and_then(Value::as_str).ok_or((400, "missing 'name'".to_string()))?.to_string();
+            let resp = {
+                let mut s = state.settings.lock().unwrap();
+                s.rename_mib_profile(&id, name);
+                profiles_response(&s)
+            };
+            state.save();
+            Ok(resp)
+        }
+
+        "set_active_mib_profile" => {
+            let id = args.get("id").and_then(Value::as_str).ok_or((400, "missing 'id'".to_string()))?.to_string();
+            let resp = {
+                let mut s = state.settings.lock().unwrap();
+                if s.mib_profiles.iter().any(|p| p.id == id) {
+                    s.active_mib_profile_id = id;
+                }
+                profiles_response(&s)
+            };
+            state.save();
+            Ok(resp)
+        }
 
         "add_mib_dir" => {
             let path = args.get("path").and_then(Value::as_str).ok_or((400, "missing 'path'".to_string()))?.to_string();
-            let dirs = {
+            let resp = {
                 let mut s = state.settings.lock().unwrap();
-                if !s.mib_dirs.contains(&path) {
-                    s.mib_dirs.push(path);
+                if let Some(p) = s.active_profile_mut() {
+                    if !p.dirs.contains(&path) {
+                        p.dirs.push(path);
+                    }
                 }
-                s.mib_dirs.clone()
+                profiles_response(&s)
             };
             state.save();
-            Ok(json!(dirs))
+            Ok(resp)
         }
 
         "remove_mib_dir" => {
             let path = args.get("path").and_then(Value::as_str).ok_or((400, "missing 'path'".to_string()))?.to_string();
-            let dirs = {
+            let resp = {
                 let mut s = state.settings.lock().unwrap();
-                s.mib_dirs.retain(|d| d != &path);
-                s.mib_dirs.clone()
+                if let Some(p) = s.active_profile_mut() {
+                    p.dirs.retain(|d| d != &path);
+                }
+                profiles_response(&s)
             };
             state.save();
-            Ok(json!(dirs))
+            Ok(resp)
         }
 
         "list_host_profiles" => Ok(json!(state.settings.lock().unwrap().host_profiles.clone())),
 
         "get_mib_tree" => {
-            let dirs = state.settings.lock().unwrap().mib_dirs.clone();
+            let dirs = state.settings.lock().unwrap().active_profile().map(|p| p.dirs.clone()).unwrap_or_default();
             let result = mib::parse_directories(&dirs);
             *state.last_parse.lock().unwrap() = Some(result.clone());
             Ok(serde_json::to_value(&result).unwrap())
@@ -89,7 +144,7 @@ fn handle(state: &AppState, cmd: &str, args: &Value) -> Result<Value, (u16, Stri
             )
             .map_err(|e| (400, e.to_string()))?;
 
-            let dirs = state.settings.lock().unwrap().mib_dirs.clone();
+            let dirs = state.settings.lock().unwrap().active_profile().map(|p| p.dirs.clone()).unwrap_or_default();
             let mut cache = state.last_parse.lock().unwrap();
             if cache.is_none() {
                 *cache = Some(mib::parse_directories(&dirs));

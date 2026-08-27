@@ -28,11 +28,23 @@ devices (switches, routers, and similar network equipment).
 
 ### 1. Add a MIB directory
 
-Click the **+** above the MIB directory list and choose a folder containing
-your `.mib` files. Every directory you add is parsed immediately and its
-contents appear in the tree below; add as many as you need; remove one with
-the **×** next to it. If any files fail to parse, a warning banner appears —
-click it to see which files and what went wrong.
+MIB directories live in **profiles** — useful if you track MIBs for more
+than one release of your software, since only one profile's directories are
+parsed at a time and switching between them is instant:
+
+- The dropdown at the top of the sidebar switches the active profile.
+- **✎** renames the active profile; **×** deletes it (only shown once you
+  have more than one).
+- **+** creates a new, empty profile and switches to it — name it (e.g.
+  `v4.0`), then add its directories as below. A fresh install starts with
+  one profile named "Default".
+
+Within the active profile, click the **+** above the MIB directory list and
+choose a folder containing your `.mib` files. Every directory you add is
+parsed immediately (searched recursively, so subdirectories are included)
+and its contents appear in the tree below; add as many as you need; remove
+one with the **×** next to it. If any files fail to parse, a warning banner
+appears — click it to see which files and what went wrong.
 
 ### 2. Browse the tree
 
@@ -96,5 +108,6 @@ Click the small chevron next to Fetch to choose the fetch mode:
   shown as its own column — SNMP agents don't return values for it during a
   table walk, so its value only ever appears in the **Index** column, which
   is where you'll find it.
-- MIB directories are remembered between launches; connection details
-  (address/port/etc.) are per-tab and are not saved once a tab is closed.
+- MIB profiles and their directories are remembered between launches;
+  connection details (address/port/etc.) are per-tab and are not saved once
+  a tab is closed.
