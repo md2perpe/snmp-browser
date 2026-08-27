@@ -583,6 +583,20 @@ function renderTableToolbar(store: Store, pane: PaneState, tab: TabState): HTMLE
       "Readable names",
     ]),
   );
+  children.push(
+    el(
+      "label",
+      {
+        class: "toggle-label",
+        title: 'Show values with a DISPLAY-HINT formatted (e.g. 123 -> 12.3) instead of raw',
+        onclick: () => store.toggleUseDisplayHints(),
+      },
+      [
+        el("div", { class: "toggle-track" + (store.state.useDisplayHints ? " on" : "") }, [el("div", { class: "toggle-knob" })]),
+        "Display hint",
+      ],
+    ),
+  );
   return el("div", { class: "table-toolbar" }, children);
 }
 
@@ -638,16 +652,41 @@ function humanizeColumnNames(cols: string[]): Record<string, string> {
   return labels;
 }
 
-function renderCell(colKey: string, row: Row, changed: boolean): HTMLTableCellElement {
+/**
+ * Applies a numeric SNMP DISPLAY-HINT ("d" or "d-N": insert a decimal point N
+ * digits from the right, e.g. "d-1" turns 123 into "12.3") to a raw integer
+ * string. Returns null - meaning "show raw as-is" - for hint forms this
+ * doesn't recognize (e.g. OCTET STRING hex/octal/ASCII hints) or a value
+ * that isn't a plain integer.
+ */
+function applyDisplayHint(raw: string, hint: string): string | null {
+  const match = /^d(?:-(\d+))?$/.exec(hint);
+  if (!match) return null;
+  const places = match[1] ? Number(match[1]) : 0;
+  if (places === 0) return null;
+  if (!/^-?\d+$/.test(raw)) return null;
+
+  const sign = raw.startsWith("-") ? "-" : "";
+  const digits = sign ? raw.slice(1) : raw;
+  const padded = digits.padStart(places + 1, "0");
+  const intPart = padded.slice(0, padded.length - places);
+  const fracPart = padded.slice(padded.length - places);
+  return `${sign}${intPart}.${fracPart}`;
+}
+
+function renderCell(colKey: string, row: Row, changed: boolean, displayHint?: string): HTMLTableCellElement {
   const bg = changed ? "var(--yellow-bg)" : "transparent";
-  const value = row[colKey] ?? "";
+  const raw = row[colKey] ?? "";
+  const hinted = displayHint ? applyDisplayHint(raw, displayHint) : null;
+  const value = hinted ?? raw;
+  const title = hinted !== null && hinted !== raw ? `raw: ${raw}` : undefined;
   const color = statusColor(value);
   if (color) {
-    return el("td", { style: { background: bg } }, [
+    return el("td", { style: { background: bg }, title }, [
       el("span", { class: "status-chip", style: { color } }, [el("span", { class: "status-dot", style: { background: color } }), value]),
     ]);
   }
-  return el("td", { style: { background: bg } }, [value]);
+  return el("td", { style: { background: bg }, title }, [value]);
 }
 
 function renderTable(store: Store, pane: PaneState, tab: TabState): HTMLElement {
@@ -656,6 +695,7 @@ function renderTable(store: Store, pane: PaneState, tab: TabState): HTMLElement 
   }
 
   const columnLabels = store.state.humanReadableColumns ? humanizeColumnNames(tab.columns) : null;
+  const displayHints = store.state.useDisplayHints ? tab.displayHints : null;
 
   const headRow = el(
     "tr",
@@ -663,7 +703,9 @@ function renderTable(store: Store, pane: PaneState, tab: TabState): HTMLElement 
     tab.columns.map((col) => {
       const startWidth = store.colWidth(tab, col);
       const sorted = tab.sortCol === col;
-      return el("th", { style: { width: startWidth + "px" }, title: col }, [
+      const hint = tab.displayHints[col];
+      const title = hint ? `${col} (has DISPLAY-HINT "${hint}")` : col;
+      return el("th", { style: { width: startWidth + "px" }, title }, [
         el("div", { class: "th-btn" + (sorted ? " sorted" : ""), onclick: () => store.setSortCol(pane.id, col) }, [
           columnLabels ? columnLabels[col] : col,
           sorted ? el("span", { style: { fontSize: "9px" } }, [tab.sortDir === 1 ? "▲" : "▼"]) : null,
@@ -686,7 +728,7 @@ function renderTable(store: Store, pane: PaneState, tab: TabState): HTMLElement 
     return el(
       "tr",
       { style: { background: rowBg, opacity, textDecoration } },
-      tab.columns.map((col) => renderCell(col, row, changedFields.includes(col))),
+      tab.columns.map((col) => renderCell(col, row, changedFields.includes(col), displayHints?.[col])),
     );
   });
 

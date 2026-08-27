@@ -28,6 +28,9 @@ pub struct ConnectionParams {
 pub struct FetchResult {
     pub columns: Vec<String>,
     pub rows: Vec<HashMap<String, String>>,
+    /// DISPLAY-HINT per column that has one (e.g. `"d-1"`), for columns whose raw
+    /// value the frontend can optionally reformat instead of showing as-is.
+    pub display_hints: HashMap<String, String>,
 }
 
 fn open_session(p: &ConnectionParams) -> Result<SyncSession, String> {
@@ -112,7 +115,7 @@ pub fn fetch_scalar(params: &ConnectionParams, oid_str: &str) -> Result<FetchRes
     if let Some((_, v)) = pdu.varbinds.clone().next() {
         row.insert("Value".to_string(), format_value(&v, &[]));
     }
-    Ok(FetchResult { columns: vec!["Value".to_string()], rows: vec![row] })
+    Ok(FetchResult { columns: vec!["Value".to_string()], rows: vec![row], display_hints: HashMap::new() })
 }
 
 pub fn fetch_table(params: &ConnectionParams, table: &TableInfo) -> Result<FetchResult, String> {
@@ -182,5 +185,8 @@ pub fn fetch_table(params: &ConnectionParams, table: &TableInfo) -> Result<Fetch
     let mut columns = vec!["Index".to_string()];
     columns.extend(table.columns.iter().map(|c| c.name.clone()));
 
-    Ok(FetchResult { columns, rows: out_rows })
+    let display_hints =
+        table.columns.iter().filter_map(|c| c.display_hint.as_ref().map(|h| (c.name.clone(), h.clone()))).collect();
+
+    Ok(FetchResult { columns, rows: out_rows, display_hints })
 }

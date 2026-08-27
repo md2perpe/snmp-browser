@@ -91,6 +91,12 @@ Click the small chevron next to Fetch to choose the fetch mode:
 - **Readable names** turns raw MIB identifiers like
   `dcpLinkviewLocalHostname` into `Local Hostname` in the column headers
   (strips the shared table-name prefix, splits the rest into words).
+- **Display hint** reformats numeric columns whose MIB defines a DISPLAY-HINT
+  (e.g. `d-1`, meaning "insert a decimal point one digit from the right") —
+  a raw `123` shows as `12.3`. A column header's tooltip says whether it has
+  one; a reformatted cell's tooltip shows the original raw value. Columns
+  without a hint, or with a hint this doesn't recognize (only the numeric
+  `d`/`d-N` form is supported), are unaffected either way.
 - Status-like values (`up`/`down`/etc.) get a colored dot for a quick read.
 
 ## Working with tabs and panes

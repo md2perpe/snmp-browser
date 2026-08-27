@@ -41,6 +41,7 @@ export class Store {
       selectedTreeNodeId: "",
       tablesOnlyMode: false,
       humanReadableColumns: false,
+      useDisplayHints: false,
       mibProfiles: [],
       activeMibProfileId: "",
       mibDirDraft: null,
@@ -103,6 +104,7 @@ export class Store {
       v3Priv: "",
       selectedNode: "",
       columns: [],
+      displayHints: {},
       sortCol: ROW_KEY_FIELD,
       sortDir: 1,
       colWidths: {},
@@ -251,6 +253,11 @@ export class Store {
 
   toggleHumanReadableColumns() {
     this.state.humanReadableColumns = !this.state.humanReadableColumns;
+    this.notify();
+  }
+
+  toggleUseDisplayHints() {
+    this.state.useDisplayHints = !this.state.useDisplayHints;
     this.notify();
   }
 
@@ -563,7 +570,7 @@ export class Store {
       return;
     }
     try {
-      const result = await invoke<{ columns: string[]; rows: Row[] }>("fetch", {
+      const result = await invoke<{ columns: string[]; rows: Row[]; displayHints: Record<string, string> }>("fetch", {
         nodeId: tab.selectedNode,
         connection: {
           hostAddr: tab.hostAddr,
@@ -586,6 +593,7 @@ export class Store {
         tab.removedGhosts = [];
       }
       tab.columns = result.columns;
+      tab.displayHints = result.displayHints;
       if (!tab.columns.includes(tab.sortCol)) tab.sortCol = tab.columns[0] ?? ROW_KEY_FIELD;
       tab.fetchError = null;
     } catch (e) {
