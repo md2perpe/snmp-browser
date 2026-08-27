@@ -163,6 +163,15 @@ export class Store {
     this.notify();
   }
 
+  /** Cycles the active pane's active tab forward (1) or backward (-1), wrapping around. */
+  cycleActiveTab(direction: 1 | -1) {
+    const pane = this.getActivePane();
+    if (pane.tabs.length < 2) return;
+    const from = pane.tabs.findIndex((t) => t.id === pane.activeTabId);
+    const next = ((from === -1 ? 0 : from) + direction + pane.tabs.length) % pane.tabs.length;
+    this.selectTab(pane.id, pane.tabs[next].id);
+  }
+
   /** Opens a new tab in the active pane with the given tree node (e.g. a table) pre-selected. */
   openNodeInNewTab(nodeId: string) {
     this.state.selectedTreeNodeId = nodeId;
