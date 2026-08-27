@@ -107,6 +107,9 @@ Click the small chevron next to Fetch to choose the fetch mode:
 - **⊟** splits the pane in two, side by side (up to two panes) — handy for
   comparing two tables, or the same table on two devices, at once.
 - **✕** on a split pane merges back down to one.
+- Switch between a pane's tabs with the keyboard: **Ctrl+Tab** /
+  **Ctrl+Shift+Tab**, or **⌘+Shift+]** / **⌘+Shift+[** — either pair cycles
+  forward/backward and wraps around at the ends.
 
 ## A couple of things worth knowing
 
