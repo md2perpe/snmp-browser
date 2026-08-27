@@ -45,6 +45,9 @@ pub struct ColumnInfo {
     pub name: String,
     pub arc: Option<u32>,
     pub enum_values: Vec<(i64, String)>,
+    /// DISPLAY-HINT declared on the TEXTUAL-CONVENTION this column's SYNTAX references, if any
+    /// (e.g. `"d-1"`, meaning a decimal point belongs one digit from the right).
+    pub display_hint: Option<String>,
 }
 
 #[derive(Serialize, Clone, Debug, Default)]
@@ -105,6 +108,9 @@ struct RawSymbol {
     /// Set when SYNTAX is `SEQUENCE OF X` - X is the entry type name.
     sequence_of_target: Option<String>,
     enum_values: Vec<(i64, String)>,
+    /// Set when SYNTAX is a bare reference to another named type (e.g. `SYNTAX DisplayString`),
+    /// so a DISPLAY-HINT declared on that type's own TEXTUAL-CONVENTION can be looked up later.
+    syntax_type_name: Option<String>,
     /// MAX-ACCESS not-accessible (e.g. a table's INDEX column) - such objects are never
     /// returned by the agent, not even during a table walk, so they can't be fetched.
     not_accessible: bool,
@@ -151,6 +157,7 @@ pub fn parse_directories(dirs: &[String]) -> ParseResult {
 
     let mut raw: Vec<RawSymbol> = Vec::new();
     let mut sequence_types: HashMap<String, Vec<String>> = HashMap::new();
+    let mut display_hints: HashMap<String, String> = HashMap::new();
     let mut errors: Vec<FileErrors> = Vec::new();
 
     for dir in dirs {
@@ -168,7 +175,7 @@ pub fn parse_directories(dirs: &[String]) -> ParseResult {
             if tree.root_node().has_error() {
                 push_error(&mut errors, &file, "contains syntax errors (parsed on a best-effort basis)".into());
             }
-            walk_module(tree.root_node(), src.as_bytes(), &file, &mut raw, &mut sequence_types);
+            walk_module(tree.root_node(), src.as_bytes(), &file, &mut raw, &mut sequence_types, &mut display_hints);
         }
     }
 
@@ -181,7 +188,7 @@ pub fn parse_directories(dirs: &[String]) -> ParseResult {
 
     let tree = build_tree(&raw, &resolved);
     let tables_tree = build_tables_tree(&raw, &resolved);
-    let tables = build_tables(&raw, &sequence_types, &resolved);
+    let tables = build_tables(&raw, &sequence_types, &display_hints, &resolved);
     let symbols = raw
         .iter()
         .filter(|s| s.kind != RawKind::Other)
@@ -209,7 +216,14 @@ fn find_child_by_kind<'a>(node: Node<'a>, kind: &str) -> Option<Node<'a>> {
     found
 }
 
-fn walk_module(root: Node, src: &[u8], file: &str, raw: &mut Vec<RawSymbol>, sequence_types: &mut HashMap<String, Vec<String>>) {
+fn walk_module(
+    root: Node,
+    src: &[u8],
+    file: &str,
+    raw: &mut Vec<RawSymbol>,
+    sequence_types: &mut HashMap<String, Vec<String>>,
+    display_hints: &mut HashMap<String, String>,
+) {
     let Some(module_def) = find_child_by_kind(root, "module_definition") else { return };
     let mut cursor = module_def.walk();
     for assignment in module_def.named_children(&mut cursor) {
@@ -226,6 +240,7 @@ fn walk_module(root: Node, src: &[u8], file: &str, raw: &mut Vec<RawSymbol>, seq
                     kind: RawKind::Group,
                     sequence_of_target: None,
                     enum_values: vec![],
+                    syntax_type_name: None,
                     not_accessible: false,
                     file: file.to_string(),
                 });
@@ -242,6 +257,7 @@ fn walk_module(root: Node, src: &[u8], file: &str, raw: &mut Vec<RawSymbol>, seq
                 let mut kind = RawKind::Scalar;
                 let mut sequence_of_target = None;
                 let mut enum_values = vec![];
+                let mut syntax_type_name = None;
 
                 if let Some(syntax_clause) = clauses.child_by_field_name("syntax") {
                     if let Some(type_node) = find_child_by_kind(syntax_clause, "type") {
@@ -252,6 +268,13 @@ fn walk_module(root: Node, src: &[u8], file: &str, raw: &mut Vec<RawSymbol>, seq
                             }
                         } else if let Some(enum_node) = find_child_by_kind(type_node, "enum_constraint") {
                             enum_values = parse_enum_constraint(enum_node, src);
+                        } else if let Some(basetype) = find_child_by_kind(type_node, "basetype") {
+                            // A bare reference to another named type (e.g. `SYNTAX DisplayString`)
+                            // rather than an inline INTEGER/OCTET STRING/etc - record the name so
+                            // build_tables() can look up a DISPLAY-HINT declared on it.
+                            if let Some(ident) = find_child_by_kind(basetype, "identifier") {
+                                syntax_type_name = Some(node_text(ident, src).to_string());
+                            }
                         }
                     }
                 }
@@ -266,9 +289,21 @@ fn walk_module(root: Node, src: &[u8], file: &str, raw: &mut Vec<RawSymbol>, seq
                     kind,
                     sequence_of_target,
                     enum_values,
+                    syntax_type_name,
                     not_accessible,
                     file: file.to_string(),
                 });
+            }
+            "textual_convention_definition" => {
+                let Some(name_node) = inner.child_by_field_name("name") else { continue };
+                if let Some(clauses) = find_child_by_kind(inner, "textual_convention_clauses") {
+                    if let Some(hint_clause) = clauses.child_by_field_name("display_hint") {
+                        if let Some(string_node) = hint_clause.named_child(0) {
+                            let hint = node_text(string_node, src).trim_matches('"').to_string();
+                            display_hints.insert(node_text(name_node, src).to_string(), hint);
+                        }
+                    }
+                }
             }
             "notification_type_assignment" | "trap_type_assignment" => {
                 // Not part of the browsable OID tree (no value to GET), but keep them
@@ -283,6 +318,7 @@ fn walk_module(root: Node, src: &[u8], file: &str, raw: &mut Vec<RawSymbol>, seq
                         kind: RawKind::Other,
                         sequence_of_target: None,
                         enum_values: vec![],
+                        syntax_type_name: None,
                         not_accessible: false,
                         file: file.to_string(),
                     });
@@ -516,7 +552,12 @@ fn build_tables_tree(raw: &[RawSymbol], resolved: &HashMap<String, Vec<u32>>) ->
         .collect()
 }
 
-fn build_tables(raw: &[RawSymbol], sequence_types: &HashMap<String, Vec<String>>, resolved: &HashMap<String, Vec<u32>>) -> HashMap<String, TableInfo> {
+fn build_tables(
+    raw: &[RawSymbol],
+    sequence_types: &HashMap<String, Vec<String>>,
+    display_hints: &HashMap<String, String>,
+    resolved: &HashMap<String, Vec<u32>>,
+) -> HashMap<String, TableInfo> {
     let by_name: HashMap<&str, &RawSymbol> = raw.iter().map(|s| (s.name.as_str(), s)).collect();
     let mut tables = HashMap::new();
 
@@ -536,10 +577,12 @@ fn build_tables(raw: &[RawSymbol], sequence_types: &HashMap<String, Vec<String>>
             .filter(|field_name| !by_name.get(field_name.as_str()).is_some_and(|c| c.not_accessible))
             .map(|field_name| {
                 let col = by_name.get(field_name.as_str());
+                let display_hint = col.and_then(|c| c.syntax_type_name.as_ref()).and_then(|t| display_hints.get(t)).cloned();
                 ColumnInfo {
                     name: field_name.clone(),
                     arc: col.and_then(|c| last_arc(&c.oid)),
                     enum_values: col.map(|c| c.enum_values.clone()).unwrap_or_default(),
+                    display_hint,
                 }
             })
             .collect();
@@ -803,6 +846,76 @@ END
         let table = result.tables.get("dcpLinkviewTable").expect("dcpLinkviewTable definition");
         let names: Vec<&str> = table.columns.iter().map(|c| c.name.as_str()).collect();
         assert_eq!(names, vec!["dcpLinkviewLocalHostname"], "not-accessible dcpLinkviewIndex should be excluded - its value is never returned by a table walk");
+    }
+
+    #[test]
+    fn display_hint_is_resolved_from_a_referenced_textual_convention() {
+        const MIB: &str = r#"
+TEST-MIB DEFINITIONS ::= BEGIN
+
+mib-2 OBJECT IDENTIFIER ::= { 1 3 6 1 2 1 }
+dcpEnv OBJECT IDENTIFIER ::= { mib-2 99 }
+
+DcpTemperature ::= TEXTUAL-CONVENTION
+    DISPLAY-HINT "d-1"
+    STATUS current
+    DESCRIPTION "Tenths of a degree C"
+    SYNTAX INTEGER
+
+dcpEnvTable OBJECT-TYPE
+    SYNTAX SEQUENCE OF DcpEnvEntry
+    MAX-ACCESS not-accessible
+    STATUS current
+    DESCRIPTION "t"
+    ::= { dcpEnv 1 }
+
+dcpEnvEntry OBJECT-TYPE
+    SYNTAX DcpEnvEntry
+    MAX-ACCESS not-accessible
+    STATUS current
+    DESCRIPTION "e"
+    INDEX { dcpEnvIndex }
+    ::= { dcpEnvTable 1 }
+
+DcpEnvEntry ::= SEQUENCE {
+    dcpEnvIndex INTEGER,
+    dcpEnvTemp DcpTemperature,
+    dcpEnvLabel OCTET STRING
+}
+
+dcpEnvIndex OBJECT-TYPE
+    SYNTAX INTEGER
+    MAX-ACCESS not-accessible
+    STATUS current
+    DESCRIPTION "i"
+    ::= { dcpEnvEntry 1 }
+
+dcpEnvTemp OBJECT-TYPE
+    SYNTAX DcpTemperature
+    MAX-ACCESS read-only
+    STATUS current
+    DESCRIPTION "temp"
+    ::= { dcpEnvEntry 2 }
+
+dcpEnvLabel OBJECT-TYPE
+    SYNTAX OCTET STRING
+    MAX-ACCESS read-only
+    STATUS current
+    DESCRIPTION "label"
+    ::= { dcpEnvEntry 3 }
+
+END
+"#;
+        let dir = write_fixture(MIB);
+        let result = parse_directories(&[dir.path().to_string_lossy().to_string()]);
+
+        let table = result.tables.get("dcpEnvTable").expect("dcpEnvTable definition");
+        let temp = table.columns.iter().find(|c| c.name == "dcpEnvTemp").expect("dcpEnvTemp column");
+        assert_eq!(temp.display_hint, Some("d-1".to_string()));
+
+        // A column whose SYNTAX doesn't reference a TC with a DISPLAY-HINT has none.
+        let label = table.columns.iter().find(|c| c.name == "dcpEnvLabel").expect("dcpEnvLabel column");
+        assert_eq!(label.display_hint, None);
     }
 
     /// Locks down the wire shape the TypeScript frontend actually deserializes:

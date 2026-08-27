@@ -69,6 +69,8 @@ export interface TabState {
   selectedNode: string;
   /** Column order from the last successful fetch; empty until the first fetch. */
   columns: string[];
+  /** DISPLAY-HINT per column that has one (e.g. "d-1"), from the last successful fetch. */
+  displayHints: Record<string, string>;
   sortCol: string;
   sortDir: 1 | -1;
   colWidths: ColWidths;
@@ -98,6 +100,8 @@ export interface AppState {
   tablesOnlyMode: boolean;
   /** When true, table column headers show a humanized form (shared prefix stripped, camelCase split into title-cased words) instead of the raw MIB identifier. */
   humanReadableColumns: boolean;
+  /** When true, numeric values in a column with a DISPLAY-HINT (e.g. "d-1") are shown reformatted (123 -> 12.3) instead of raw. */
+  useDisplayHints: boolean;
   /** Named sets of MIB directories (e.g. one per software release) - only the active one's directories are parsed. */
   mibProfiles: MibProfile[];
   activeMibProfileId: string;
