@@ -100,7 +100,8 @@ function renderSidebar(store: Store): HTMLElement {
   const visibleNodes = store.getVisibleNodes();
   const errors = store.state.parseErrors;
 
-  const dirRows: HTMLElement[] = store.state.mibDirs.map((dir) =>
+  const activeProfile = store.activeMibProfile();
+  const dirRows: HTMLElement[] = (activeProfile?.dirs ?? []).map((dir) =>
     el("div", { class: "mib-dir-row" }, [
       el("div", { class: "mib-dir-icon" }),
       el("div", { class: "mib-dir-path", title: dir }, [dir]),
@@ -138,11 +139,110 @@ function renderSidebar(store: Store): HTMLElement {
           el("button", { class: "mib-dir-draft-cancel", title: "Cancel", onclick: () => store.cancelMibDirDraft() }, ["×"]),
         ]);
 
+  const profiles = store.state.mibProfiles;
+  const canDeleteProfile = profiles.length > 1;
+  const profileRow = el("div", { class: "mib-profile-row" }, [
+    el(
+      "select",
+      {
+        class: "mib-profile-select",
+        value: store.state.activeMibProfileId,
+        onchange: (e: Event) => void store.switchMibProfile((e.target as HTMLSelectElement).value),
+      },
+      profiles.map((p) => el("option", { value: p.id }, [p.name])),
+    ),
+    el(
+      "button",
+      {
+        class: "mib-profile-btn",
+        title: "Rename profile",
+        onclick: () => {
+          store.startRenamingMibProfile();
+          document.querySelector<HTMLInputElement>(".mib-profile-rename-input")?.select();
+        },
+      },
+      ["✎"],
+    ),
+    canDeleteProfile
+      ? el(
+          "button",
+          {
+            class: "mib-profile-btn",
+            title: "Delete profile",
+            onclick: () => void store.removeMibProfile(store.state.activeMibProfileId),
+          },
+          ["×"],
+        )
+      : null,
+    el(
+      "button",
+      {
+        class: "mib-profile-btn",
+        title: "New profile",
+        onclick: () => {
+          store.startMibProfileDraft();
+          document.querySelector<HTMLInputElement>(".mib-profile-draft-input")?.focus();
+        },
+      },
+      ["+"],
+    ),
+  ]);
+
+  const renameRow = store.state.renamingMibProfile
+    ? el("div", { class: "mib-dir-draft-row" }, [
+        el("input", {
+          class: "mib-dir-draft-input mib-profile-rename-input",
+          value: activeProfile?.name ?? "",
+          "data-focus-key": "mibProfileRename",
+          onkeydown: (e: KeyboardEvent) => {
+            if (e.key === "Enter") void store.renameMibProfile(store.state.activeMibProfileId, (e.target as HTMLInputElement).value);
+            else if (e.key === "Escape") store.cancelRenamingMibProfile();
+          },
+        }),
+        el(
+          "button",
+          {
+            class: "mib-dir-draft-confirm",
+            title: "Save",
+            onclick: () => {
+              const input = document.querySelector<HTMLInputElement>(".mib-profile-rename-input");
+              void store.renameMibProfile(store.state.activeMibProfileId, input?.value ?? "");
+            },
+          },
+          ["✓"],
+        ),
+        el("button", { class: "mib-dir-draft-cancel", title: "Cancel", onclick: () => store.cancelRenamingMibProfile() }, ["×"]),
+      ])
+    : null;
+
+  const profileDraft = store.state.mibProfileDraft;
+  const profileDraftRow =
+    profileDraft === null
+      ? null
+      : el("div", { class: "mib-dir-draft-row" }, [
+          el("input", {
+            class: "mib-dir-draft-input mib-profile-draft-input",
+            placeholder: "Profile name (e.g. v4.0)",
+            value: profileDraft,
+            "data-focus-key": "mibProfileDraft",
+            oninput: (e: Event) => store.updateMibProfileDraft((e.target as HTMLInputElement).value),
+            onkeydown: (e: KeyboardEvent) => {
+              if (e.key === "Enter") void store.submitMibProfileDraft();
+              else if (e.key === "Escape") store.cancelMibProfileDraft();
+            },
+          }),
+          el("button", { class: "mib-dir-draft-confirm", title: "Create", onclick: () => void store.submitMibProfileDraft() }, ["✓"]),
+          el("button", { class: "mib-dir-draft-cancel", title: "Cancel", onclick: () => store.cancelMibProfileDraft() }, ["×"]),
+        ]);
+
   return el("div", { class: "sidebar", style: { width: store.state.leftWidth + "px" } }, [
     el("div", { class: "sidebar-header" }, [
       el("button", { class: "icon-btn", title: "Hide sidebar", onclick: () => store.toggleLeft() }, [sidebarToggleIcon()]),
     ]),
     el("div", { class: "mib-dirs" }, [
+      profileRow,
+      renameRow,
+      profileDraftRow,
       el("div", { class: "mib-dirs-head" }, [
         el("div", { class: "mib-dirs-title" }, ["MIB Directories"]),
         el(

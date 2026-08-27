@@ -1,6 +1,18 @@
 import { invoke, isTauri, pickDirectory } from "./api";
 import { DEFAULT_COL_WIDTH, mockHostProfiles } from "./mockData";
-import type { AppState, HostProfile, MibNode, PaneState, ParseResult, Row, RowMetaEntry, SnmpVersion, TabState } from "./types";
+import type {
+  AppState,
+  HostProfile,
+  MibNode,
+  MibProfile,
+  MibProfilesResponse,
+  PaneState,
+  ParseResult,
+  Row,
+  RowMetaEntry,
+  SnmpVersion,
+  TabState,
+} from "./types";
 
 type Patch<T> = Partial<T> | ((t: T) => Partial<T>);
 
@@ -29,8 +41,11 @@ export class Store {
       selectedTreeNodeId: "",
       tablesOnlyMode: false,
       humanReadableColumns: false,
-      mibDirs: [],
+      mibProfiles: [],
+      activeMibProfileId: "",
       mibDirDraft: null,
+      mibProfileDraft: null,
+      renamingMibProfile: false,
       parseErrors: [],
       parseErrorsOpen: false,
       leftWidth: 330,
@@ -43,11 +58,23 @@ export class Store {
   }
 
   async init() {
-    const [mibDirs, hostProfiles] = await Promise.all([invoke<string[]>("list_mib_dirs"), invoke<HostProfile[]>("list_host_profiles")]);
-    this.state.mibDirs = mibDirs;
+    const [profiles, hostProfiles] = await Promise.all([
+      invoke<MibProfilesResponse>("list_mib_profiles"),
+      invoke<HostProfile[]>("list_host_profiles"),
+    ]);
+    this.applyMibProfilesResponse(profiles);
     this.hostProfiles = hostProfiles;
     this.notify();
     await this.loadMibTree();
+  }
+
+  private applyMibProfilesResponse(resp: MibProfilesResponse) {
+    this.state.mibProfiles = resp.profiles;
+    this.state.activeMibProfileId = resp.activeProfileId;
+  }
+
+  activeMibProfile(): MibProfile | undefined {
+    return this.state.mibProfiles.find((p) => p.id === this.state.activeMibProfileId);
   }
 
   onChange(fn: () => void) {
@@ -293,15 +320,91 @@ export class Store {
   }
 
   private async commitMibDir(path: string) {
-    this.state.mibDirs = await invoke<string[]>("add_mib_dir", { path });
+    this.applyMibProfilesResponse(await invoke<MibProfilesResponse>("add_mib_dir", { path }));
     this.notify();
     await this.loadMibTree();
   }
 
   async removeMibDir(path: string) {
-    this.state.mibDirs = await invoke<string[]>("remove_mib_dir", { path });
+    this.applyMibProfilesResponse(await invoke<MibProfilesResponse>("remove_mib_dir", { path }));
     this.notify();
     await this.loadMibTree();
+  }
+
+  // ---------- MIB profiles ----------
+
+  async switchMibProfile(id: string) {
+    if (id === this.state.activeMibProfileId) return;
+    this.applyMibProfilesResponse(await invoke<MibProfilesResponse>("set_active_mib_profile", { id }));
+    // The previous profile's tree state doesn't apply to the new one.
+    this.state.expanded = {};
+    this.state.selectedTreeNodeId = "";
+    this.notify();
+    await this.loadMibTree();
+  }
+
+  startMibProfileDraft() {
+    this.state.mibProfileDraft = "";
+    this.notify();
+  }
+
+  updateMibProfileDraft(text: string) {
+    this.state.mibProfileDraft = text;
+    this.notify();
+  }
+
+  cancelMibProfileDraft() {
+    this.state.mibProfileDraft = null;
+    this.notify();
+  }
+
+  async submitMibProfileDraft() {
+    const name = this.state.mibProfileDraft?.trim();
+    this.state.mibProfileDraft = null;
+    if (!name) {
+      this.notify();
+      return;
+    }
+    this.applyMibProfilesResponse(await invoke<MibProfilesResponse>("add_mib_profile", { name }));
+    this.state.expanded = {};
+    this.state.selectedTreeNodeId = "";
+    this.notify();
+    await this.loadMibTree();
+  }
+
+  async removeMibProfile(id: string) {
+    if (this.state.mibProfiles.length <= 1) return;
+    const wasActive = id === this.state.activeMibProfileId;
+    this.applyMibProfilesResponse(await invoke<MibProfilesResponse>("remove_mib_profile", { id }));
+    if (wasActive) {
+      this.state.expanded = {};
+      this.state.selectedTreeNodeId = "";
+      this.notify();
+      await this.loadMibTree();
+    } else {
+      this.notify();
+    }
+  }
+
+  startRenamingMibProfile() {
+    this.state.renamingMibProfile = true;
+    this.notify();
+  }
+
+  cancelRenamingMibProfile() {
+    this.state.renamingMibProfile = false;
+    this.notify();
+  }
+
+  async renameMibProfile(id: string, name: string) {
+    this.state.renamingMibProfile = false;
+    const trimmed = name.trim();
+    if (!trimmed) {
+      this.notify();
+      return;
+    }
+    this.applyMibProfilesResponse(await invoke<MibProfilesResponse>("rename_mib_profile", { id, name: trimmed }));
+    this.notify();
   }
 
   /** The tree currently shown in the sidebar: the full group hierarchy, or the flat tables-only view. */

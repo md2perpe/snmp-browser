@@ -22,6 +22,17 @@ export interface ParseResult {
   errors: FileErrors[];
 }
 
+export interface MibProfile {
+  id: string;
+  name: string;
+  dirs: string[];
+}
+
+export interface MibProfilesResponse {
+  profiles: MibProfile[];
+  activeProfileId: string;
+}
+
 export interface HostProfile {
   id: string;
   label: string;
@@ -87,9 +98,15 @@ export interface AppState {
   tablesOnlyMode: boolean;
   /** When true, table column headers show a humanized form (shared prefix stripped, camelCase split into title-cased words) instead of the raw MIB identifier. */
   humanReadableColumns: boolean;
-  mibDirs: string[];
+  /** Named sets of MIB directories (e.g. one per software release) - only the active one's directories are parsed. */
+  mibProfiles: MibProfile[];
+  activeMibProfileId: string;
   /** Inline text-entry draft for adding a MIB directory outside Tauri (no native picker there); null when not editing. */
   mibDirDraft: string | null;
+  /** Inline text-entry draft for naming a new MIB profile; null when not editing. */
+  mibProfileDraft: string | null;
+  /** True while the active MIB profile's name is being edited inline. */
+  renamingMibProfile: boolean;
   parseErrors: FileErrors[];
   parseErrorsOpen: boolean;
   leftWidth: number;

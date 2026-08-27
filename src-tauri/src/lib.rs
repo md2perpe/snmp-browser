@@ -2,7 +2,8 @@ pub mod mib;
 pub mod settings;
 pub mod snmp;
 
-use settings::{HostProfile, Settings};
+use serde::Serialize;
+use settings::{HostProfile, MibProfile, Settings};
 use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::{Manager, State};
@@ -19,33 +20,94 @@ impl AppState {
     }
 }
 
-#[tauri::command]
-fn list_mib_dirs(state: State<AppState>) -> Vec<String> {
-    state.settings.lock().unwrap().mib_dirs.clone()
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MibProfilesResponse {
+    profiles: Vec<MibProfile>,
+    active_profile_id: String,
+}
+
+fn profiles_response(settings: &Settings) -> MibProfilesResponse {
+    MibProfilesResponse { profiles: settings.mib_profiles.clone(), active_profile_id: settings.active_mib_profile_id.clone() }
 }
 
 #[tauri::command]
-fn add_mib_dir(state: State<AppState>, path: String) -> Vec<String> {
-    let dirs = {
+fn list_mib_profiles(state: State<AppState>) -> MibProfilesResponse {
+    profiles_response(&state.settings.lock().unwrap())
+}
+
+#[tauri::command]
+fn add_mib_profile(state: State<AppState>, name: String) -> MibProfilesResponse {
+    let resp = {
         let mut settings = state.settings.lock().unwrap();
-        if !settings.mib_dirs.contains(&path) {
-            settings.mib_dirs.push(path);
+        settings.add_mib_profile(name);
+        profiles_response(&settings)
+    };
+    state.save();
+    resp
+}
+
+#[tauri::command]
+fn remove_mib_profile(state: State<AppState>, id: String) -> MibProfilesResponse {
+    let resp = {
+        let mut settings = state.settings.lock().unwrap();
+        settings.remove_mib_profile(&id);
+        profiles_response(&settings)
+    };
+    state.save();
+    resp
+}
+
+#[tauri::command]
+fn rename_mib_profile(state: State<AppState>, id: String, name: String) -> MibProfilesResponse {
+    let resp = {
+        let mut settings = state.settings.lock().unwrap();
+        settings.rename_mib_profile(&id, name);
+        profiles_response(&settings)
+    };
+    state.save();
+    resp
+}
+
+#[tauri::command]
+fn set_active_mib_profile(state: State<AppState>, id: String) -> MibProfilesResponse {
+    let resp = {
+        let mut settings = state.settings.lock().unwrap();
+        if settings.mib_profiles.iter().any(|p| p.id == id) {
+            settings.active_mib_profile_id = id;
         }
-        settings.mib_dirs.clone()
+        profiles_response(&settings)
     };
     state.save();
-    dirs
+    resp
 }
 
 #[tauri::command]
-fn remove_mib_dir(state: State<AppState>, path: String) -> Vec<String> {
-    let dirs = {
+fn add_mib_dir(state: State<AppState>, path: String) -> MibProfilesResponse {
+    let resp = {
         let mut settings = state.settings.lock().unwrap();
-        settings.mib_dirs.retain(|d| d != &path);
-        settings.mib_dirs.clone()
+        if let Some(p) = settings.active_profile_mut() {
+            if !p.dirs.contains(&path) {
+                p.dirs.push(path);
+            }
+        }
+        profiles_response(&settings)
     };
     state.save();
-    dirs
+    resp
+}
+
+#[tauri::command]
+fn remove_mib_dir(state: State<AppState>, path: String) -> MibProfilesResponse {
+    let resp = {
+        let mut settings = state.settings.lock().unwrap();
+        if let Some(p) = settings.active_profile_mut() {
+            p.dirs.retain(|d| d != &path);
+        }
+        profiles_response(&settings)
+    };
+    state.save();
+    resp
 }
 
 #[tauri::command]
@@ -55,7 +117,7 @@ fn list_host_profiles(state: State<AppState>) -> Vec<HostProfile> {
 
 #[tauri::command]
 fn get_mib_tree(state: State<AppState>) -> mib::ParseResult {
-    let dirs = state.settings.lock().unwrap().mib_dirs.clone();
+    let dirs = state.settings.lock().unwrap().active_profile().map(|p| p.dirs.clone()).unwrap_or_default();
     let result = mib::parse_directories(&dirs);
     *state.last_parse.lock().unwrap() = Some(result.clone());
     result
@@ -63,7 +125,7 @@ fn get_mib_tree(state: State<AppState>) -> mib::ParseResult {
 
 #[tauri::command]
 fn fetch(state: State<AppState>, node_id: String, connection: snmp::ConnectionParams) -> Result<snmp::FetchResult, String> {
-    let dirs = state.settings.lock().unwrap().mib_dirs.clone();
+    let dirs = state.settings.lock().unwrap().active_profile().map(|p| p.dirs.clone()).unwrap_or_default();
     let mut cache = state.last_parse.lock().unwrap();
     if cache.is_none() {
         *cache = Some(mib::parse_directories(&dirs));
@@ -100,7 +162,18 @@ pub fn run() {
             app.manage(AppState { settings_path, settings: Mutex::new(settings), last_parse: Mutex::new(None) });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![list_mib_dirs, add_mib_dir, remove_mib_dir, list_host_profiles, get_mib_tree, fetch])
+        .invoke_handler(tauri::generate_handler![
+            list_mib_profiles,
+            add_mib_profile,
+            remove_mib_profile,
+            rename_mib_profile,
+            set_active_mib_profile,
+            add_mib_dir,
+            remove_mib_dir,
+            list_host_profiles,
+            get_mib_tree,
+            fetch
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
