@@ -1,6 +1,11 @@
 import { el, startDrag, svgIcon } from "./dom";
 import type { Store } from "./state";
-import type { MibNode, PaneState, Row, SnmpVersion, TabState, TrapEvent, TrapTabState, TrapVarbind } from "./types";
+import type { MibNode, PaneState, Row, SnmpVersion, TabState, Theme, TrapEvent, TrapTabState, TrapVarbind } from "./types";
+
+const THEME_OPTIONS: { id: Theme; label: string }[] = [
+  { id: "dark", label: "Dark" },
+  { id: "classic", label: "Classic Light" },
+];
 
 /** Standard "sidebar" icon (rounded panel outline with a left-panel divider), used to toggle the sidebar. */
 function sidebarToggleIcon(): SVGSVGElement {
@@ -17,6 +22,18 @@ function trapListenerIcon(): SVGSVGElement {
   return svgIcon('<path d="M12 2v5"/><path d="M12 22v-6"/><path d="M5 9a7 7 0 0 1 14 0"/><circle cx="12" cy="9" r="2"/>');
 }
 
+/** Paint-palette icon, used for the theme picker. */
+function paletteIcon(): SVGSVGElement {
+  return svgIcon(
+    '<path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.9 0 1.6-.7 1.6-1.7 0-.4-.2-.8-.4-1.1-.3-.3-.4-.6-.4-1.1 0-.9.7-1.6 1.6-1.6H16c3 0 5.5-2.5 5.5-5.5C21.5 5.6 17.2 2 12 2z"/><circle cx="6.5" cy="11.5" r="1"/><circle cx="9.5" cy="7.5" r="1"/><circle cx="14.5" cy="7.5" r="1"/><circle cx="17.5" cy="11.5" r="1"/>',
+  );
+}
+
+function openThemeMenu(store: Store, e: MouseEvent) {
+  const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+  store.toggleThemeMenu(rect.left, rect.bottom + 4);
+}
+
 const AUTO_REFRESH_RING_RADIUS = 9;
 const AUTO_REFRESH_RING_CIRCUMFERENCE = 2 * Math.PI * AUTO_REFRESH_RING_RADIUS;
 
@@ -24,7 +41,7 @@ const AUTO_REFRESH_RING_CIRCUMFERENCE = 2 * Math.PI * AUTO_REFRESH_RING_RADIUS;
 function autoRefreshRingIcon(tabId: string, fraction: number): SVGSVGElement {
   const offset = AUTO_REFRESH_RING_CIRCUMFERENCE * (1 - fraction);
   const svg = svgIcon(
-    `<circle cx="12" cy="12" r="${AUTO_REFRESH_RING_RADIUS}" fill="none" stroke="rgba(255,255,255,0.25)" stroke-width="3"/>` +
+    `<circle cx="12" cy="12" r="${AUTO_REFRESH_RING_RADIUS}" fill="none" stroke="currentColor" stroke-opacity="0.25" stroke-width="3"/>` +
       `<circle cx="12" cy="12" r="${AUTO_REFRESH_RING_RADIUS}" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" ` +
       `stroke-dasharray="${AUTO_REFRESH_RING_CIRCUMFERENCE}" stroke-dashoffset="${offset}" transform="rotate(-90 12 12)"/>`,
   );
@@ -71,7 +88,7 @@ function renderTreeRow(store: Store, node: MibNode, depth: number, selectedNodeI
   const selected = node.id === selectedNodeId;
   const caretVisible = !!node.children;
   const expanded = !!store.state.expanded[node.id];
-  const textColor = selected ? "#ffffff" : node.type === "group" ? "var(--text-secondary)" : "#a9aab0";
+  const textColor = selected ? "var(--tree-selected-text)" : node.type === "group" ? "var(--text-secondary)" : "var(--tree-item-text)";
   const fontWeight = selected ? "600" : node.type === "group" ? "600" : "400";
   const bg = selected ? "var(--accent-selected-bg)" : "transparent";
   const title = node.resolved ? node.oid : `Could not resolve an absolute OID for '${node.label}' - its ancestor chain isn't fully defined in the configured MIB directories.`;
@@ -262,6 +279,8 @@ function renderSidebar(store: Store): HTMLElement {
   return el("div", { class: "sidebar", style: { width: store.state.leftWidth + "px" } }, [
     el("div", { class: "sidebar-header" }, [
       el("button", { class: "icon-btn", title: "Hide sidebar", onclick: () => store.toggleLeft() }, [sidebarToggleIcon()]),
+      el("div", { class: "spacer" }),
+      el("button", { class: "icon-btn", title: "Theme", onclick: (e: MouseEvent) => openThemeMenu(store, e) }, [paletteIcon()]),
     ]),
     el("div", { class: "mib-dirs" }, [
       profileRow,
@@ -391,9 +410,33 @@ function renderRefreshMenu(store: Store): HTMLElement | null {
   );
 }
 
+function renderThemeMenu(store: Store): HTMLElement | null {
+  const menu = store.state.themeMenu;
+  if (!menu) return null;
+
+  const item = (label: string, active: boolean, onclick: () => void) =>
+    el("button", { class: "context-menu-item" + (active ? " active" : ""), onclick }, [
+      el("span", { class: "context-menu-check" }, [active ? "✓" : ""]),
+      label,
+    ]);
+
+  return el(
+    "div",
+    { class: "context-menu-overlay", onclick: () => store.closeThemeMenu(), oncontextmenu: (e: Event) => e.preventDefault() },
+    [
+      el(
+        "div",
+        { class: "context-menu", style: { left: menu.x + "px", top: menu.y + "px" }, onclick: (e: Event) => e.stopPropagation() },
+        THEME_OPTIONS.map((opt) => item(opt.label, store.state.theme === opt.id, () => store.setTheme(opt.id))),
+      ),
+    ],
+  );
+}
+
 function renderCollapsedRail(store: Store): HTMLElement {
   return el("div", { class: "sidebar-rail" }, [
     el("button", { class: "icon-btn", title: "Show sidebar", onclick: () => store.toggleLeft() }, [sidebarToggleIcon()]),
+    el("button", { class: "icon-btn", title: "Theme", onclick: (e: MouseEvent) => openThemeMenu(store, e) }, [paletteIcon()]),
   ]);
 }
 
@@ -1089,6 +1132,8 @@ export function renderApp(store: Store): HTMLElement {
   if (contextMenu) overlays.push(contextMenu);
   const refreshMenu = renderRefreshMenu(store);
   if (refreshMenu) overlays.push(refreshMenu);
+  const themeMenu = renderThemeMenu(store);
+  if (themeMenu) overlays.push(themeMenu);
   if (overlays.length === 0) return appBody;
 
   // Wrapped in a `display: contents` div so fixed-position overlays sit

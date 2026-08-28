@@ -44,6 +44,8 @@ export interface HostProfile {
 
 export type SnmpVersion = "v1" | "v2c" | "v3";
 
+export type Theme = "dark" | "classic";
+
 /** A fetched row's columns are whatever the selected MIB table defines - not fixed ahead of time. */
 export type Row = Record<string, string>;
 
@@ -175,4 +177,7 @@ export interface AppState {
   treeContextMenu: { x: number; y: number; nodeId: string } | null;
   /** Fetch mode dropdown (manual vs. auto-refresh) for a pane's split button; null when closed. */
   refreshMenu: { paneId: string; x: number; y: number } | null;
+  theme: Theme;
+  /** Theme picker dropdown; null when closed. */
+  themeMenu: { x: number; y: number } | null;
 }

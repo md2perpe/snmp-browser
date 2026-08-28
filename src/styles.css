@@ -26,6 +26,49 @@
   --added-bg: rgba(52, 211, 153, 0.1);
   --removed-bg: rgba(248, 113, 113, 0.1);
   --track-off: #3a3b3f;
+  --hover-weak: rgba(255, 255, 255, 0.05);
+  --hover-strong: rgba(255, 255, 255, 0.08);
+  --divider-strong: rgba(255, 255, 255, 0.14);
+  --tree-selected-text: #ffffff;
+  --tree-item-text: #a9aab0;
+}
+
+/* Classic theme: a lighter, more traditional look (light gray panels, denser
+   borders) in the vein of older desktop MIB browsers, as an alternative to
+   the default dark theme above. */
+[data-theme="classic"] {
+  --bg-app: #ffffff;
+  --bg-sidebar: #eceef1;
+  --bg-deep: #e2e4e8;
+  --bg-input: #ffffff;
+  --bg-chip: #e6e8eb;
+  --border-soft: rgba(0, 0, 0, 0.08);
+  --border-mid: rgba(0, 0, 0, 0.15);
+  --border-strong: rgba(0, 0, 0, 0.22);
+  --border-hair: rgba(0, 0, 0, 0.07);
+  --text-primary: #1b1c1f;
+  --text-secondary: #34363b;
+  --text-muted: #5c5e64;
+  --text-dim: #797b81;
+  --text-dimmer: #9a9ca2;
+  --accent: #2563eb;
+  --accent-selected-bg: rgba(37, 99, 235, 0.16);
+  --accent-hover: rgba(37, 99, 235, 0.1);
+  --icon-group: #6b6d72;
+  --icon-scalar: #55585e;
+  --icon-table: #2563eb;
+  --green: #15803d;
+  --red: #dc2626;
+  --yellow: #b45309;
+  --yellow-bg: rgba(180, 83, 9, 0.14);
+  --added-bg: rgba(21, 128, 61, 0.08);
+  --removed-bg: rgba(220, 38, 38, 0.08);
+  --track-off: #c7c9cd;
+  --hover-weak: rgba(0, 0, 0, 0.045);
+  --hover-strong: rgba(0, 0, 0, 0.07);
+  --divider-strong: rgba(0, 0, 0, 0.18);
+  --tree-selected-text: #0b1220;
+  --tree-item-text: #4b4d52;
 }
 
 * {
@@ -58,7 +101,7 @@ body {
   height: 9px;
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.14);
+  background: var(--divider-strong);
   border-radius: 5px;
 }
 ::-webkit-scrollbar-track {
@@ -108,7 +151,7 @@ button {
   justify-content: center;
 }
 .icon-btn:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--hover-strong);
   color: var(--text-primary);
 }
 
@@ -432,7 +475,7 @@ button {
   padding: 0 8px 0 2px;
 }
 .tree-row:hover .tree-row-bg {
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--hover-weak);
 }
 .tree-caret {
   width: 12px;
@@ -511,7 +554,7 @@ button {
 .splitter-line {
   width: 2px;
   height: 100%;
-  background: rgba(255, 255, 255, 0.14);
+  background: var(--divider-strong);
 }
 
 /* ---------- Pane group ---------- */
@@ -1023,7 +1066,7 @@ table.trap-table {
   cursor: pointer;
 }
 .trap-row:hover {
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--hover-weak);
 }
 .trap-row.expanded {
   background: var(--accent-hover);
