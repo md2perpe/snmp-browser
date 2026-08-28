@@ -159,7 +159,6 @@ export class Store {
       startError: null,
       events: [],
       lastSeq: 0,
-      paused: false,
       expandedSeq: null,
       filterText: "",
       ...opts,
@@ -794,10 +793,6 @@ export class Store {
     this.updateActiveTrapTabInPane(paneId, { filterText: text });
   }
 
-  toggleTrapPaused(paneId: string) {
-    this.updateActiveTrapTabInPane(paneId, (t) => ({ paused: !t.paused }));
-  }
-
   private startTrapPolling(tabId: string) {
     this.stopTrapPolling(tabId);
     const timer = setInterval(() => void this.pollTrapTab(tabId), TRAP_POLL_INTERVAL_MS);
@@ -827,7 +822,7 @@ export class Store {
       this.stopTrapPolling(tabId);
       return;
     }
-    if (!tab.running || tab.paused) return;
+    if (!tab.running) return;
     try {
       const events = await invoke<TrapEvent[]>("poll_traps", { id: tabId, afterSeq: tab.lastSeq });
       if (events.length === 0) return;

@@ -135,8 +135,6 @@ export interface TrapTabState {
   events: TrapEvent[];
   /** Highest event `seq` already merged in, so polling only asks for what's new. */
   lastSeq: number;
-  /** When true, polling still runs (events keep accumulating server-side) but new events aren't merged into the visible list. */
-  paused: boolean;
   expandedSeq: number | null;
   filterText: string;
 }
