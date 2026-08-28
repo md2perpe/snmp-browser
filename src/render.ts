@@ -936,11 +936,6 @@ function renderTrapToolbar(store: Store, pane: PaneState, tab: TrapTabState): HT
       "data-focus-key": `trap:${tab.id}:filter`,
       oninput: (e: Event) => store.setTrapFilter(pane.id, (e.target as HTMLInputElement).value),
     }),
-    el(
-      "label",
-      { class: "toggle-label", title: "Pause merging newly received traps into the list below (the listener keeps running)", onclick: () => store.toggleTrapPaused(pane.id) },
-      [el("div", { class: "toggle-track" + (tab.paused ? "" : " on") }, [el("div", { class: "toggle-knob" })]), "Live"],
-    ),
     el("button", { class: "trap-clear-btn", onclick: () => void store.clearTraps(pane.id) }, ["Clear"]),
   ]);
 
