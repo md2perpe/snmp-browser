@@ -88,7 +88,7 @@ fn format_timeticks(v: u32) -> String {
     }
 }
 
-fn format_value(value: &Value, enum_values: &[(i64, String)]) -> String {
+pub(crate) fn format_value(value: &Value, enum_values: &[(i64, String)]) -> String {
     match value {
         Value::Integer(n) => enum_values.iter().find(|(v, _)| v == n).map(|(_, name)| format!("{name}({n})")).unwrap_or_else(|| n.to_string()),
         Value::OctetString(bytes) => format_octet_string(bytes),

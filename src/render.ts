@@ -1,6 +1,6 @@
 import { el, startDrag, svgIcon } from "./dom";
 import type { Store } from "./state";
-import type { MibNode, PaneState, Row, SnmpVersion, TabState } from "./types";
+import type { MibNode, PaneState, Row, SnmpVersion, TabState, TrapEvent, TrapTabState, TrapVarbind } from "./types";
 
 /** Standard "sidebar" icon (rounded panel outline with a left-panel divider), used to toggle the sidebar. */
 function sidebarToggleIcon(): SVGSVGElement {
@@ -12,17 +12,41 @@ function chevronDownIcon(): SVGSVGElement {
   return svgIcon('<path d="M6 9l6 6 6-6"/>');
 }
 
+/** Broadcast-tower icon, used for the "new trap listener tab" action. */
+function trapListenerIcon(): SVGSVGElement {
+  return svgIcon('<path d="M12 2v5"/><path d="M12 22v-6"/><path d="M5 9a7 7 0 0 1 14 0"/><circle cx="12" cy="9" r="2"/>');
+}
+
 const AUTO_REFRESH_RING_RADIUS = 9;
 const AUTO_REFRESH_RING_CIRCUMFERENCE = 2 * Math.PI * AUTO_REFRESH_RING_RADIUS;
 
 /** Pie-chart-style countdown ring showing time left until the next auto-refresh fetch; drains clockwise as time passes. */
-function autoRefreshRingIcon(fraction: number): SVGSVGElement {
+function autoRefreshRingIcon(tabId: string, fraction: number): SVGSVGElement {
   const offset = AUTO_REFRESH_RING_CIRCUMFERENCE * (1 - fraction);
-  return svgIcon(
+  const svg = svgIcon(
     `<circle cx="12" cy="12" r="${AUTO_REFRESH_RING_RADIUS}" fill="none" stroke="rgba(255,255,255,0.25)" stroke-width="3"/>` +
       `<circle cx="12" cy="12" r="${AUTO_REFRESH_RING_RADIUS}" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" ` +
       `stroke-dasharray="${AUTO_REFRESH_RING_CIRCUMFERENCE}" stroke-dashoffset="${offset}" transform="rotate(-90 12 12)"/>`,
   );
+  svg.setAttribute("data-autorefresh-ring", tabId);
+  return svg;
+}
+
+/**
+ * Patches every auto-refresh countdown ring's stroke-dashoffset directly,
+ * without touching the rest of the DOM. Called on the 200ms UI tick instead
+ * of doing a full re-render, since replacing the whole tree that often would
+ * intermittently eat clicks elsewhere in the app (e.g. tab switching) by
+ * removing an element mid-mousedown/mouseup.
+ */
+export function updateAutoRefreshRings(store: Store, root: HTMLElement) {
+  root.querySelectorAll<SVGSVGElement>("svg[data-autorefresh-ring]").forEach((svg) => {
+    const tabId = svg.getAttribute("data-autorefresh-ring")!;
+    const fraction = store.autoRefreshFraction(tabId) ?? 1;
+    const offset = AUTO_REFRESH_RING_CIRCUMFERENCE * (1 - fraction);
+    const ring = svg.querySelectorAll("circle")[1];
+    ring?.setAttribute("stroke-dashoffset", String(offset));
+  });
 }
 
 function nodeIcon(node: MibNode): HTMLElement {
@@ -343,7 +367,7 @@ function renderRefreshMenu(store: Store): HTMLElement | null {
   if (!menu) return null;
   const pane = store.getPane(menu.paneId);
   const tab = pane && store.getPaneActiveTab(pane);
-  if (!pane || !tab) return null;
+  if (!pane || !tab || tab.kind !== "query") return null;
 
   const item = (label: string, active: boolean, onclick: () => void) =>
     el("button", { class: "context-menu-item" + (active ? " active" : ""), onclick }, [
@@ -380,8 +404,15 @@ function renderSplitter(onMouseDown: (e: MouseEvent) => void): HTMLElement {
 function renderTabBar(store: Store, pane: PaneState): HTMLElement {
   const tabs = pane.tabs.map((tab) => {
     const active = tab.id === pane.activeTabId;
-    const host = store.hostProfiles.find((h) => h.id === tab.hostId);
-    const label = (host ? host.label : tab.hostAddr || "(no address)") + " · " + tab.selectedNode;
+    let label: string;
+    let dotClass = "tab-dot";
+    if (tab.kind === "trap") {
+      label = "Trap Listener · " + (tab.running ? tab.boundAddr : "stopped");
+      dotClass += tab.startError ? " error" : tab.running ? "" : " off";
+    } else {
+      const host = store.hostProfiles.find((h) => h.id === tab.hostId);
+      label = (host ? host.label : tab.hostAddr || "(no address)") + " · " + tab.selectedNode;
+    }
     return el(
       "div",
       {
@@ -395,7 +426,7 @@ function renderTabBar(store: Store, pane: PaneState): HTMLElement {
         onclick: () => store.selectTab(pane.id, tab.id),
       },
       [
-        el("div", { class: "tab-dot" }),
+        el("div", { class: dotClass }),
         el("div", { class: "tab-label" }, [label]),
         el(
           "button",
@@ -417,6 +448,11 @@ function renderTabBar(store: Store, pane: PaneState): HTMLElement {
 
   const bar: (HTMLElement | null)[] = [
     ...tabs,
+    el(
+      "button",
+      { class: "pane-action", title: "New trap listener tab", onclick: () => store.openTrapListenerTab(pane.id) },
+      [trapListenerIcon()],
+    ),
     el("div", { class: "tab-bar-spacer" }),
     canSplit ? el("button", { class: "pane-action", title: "Split right", onclick: () => store.splitPane(pane.id) }, ["⊟"]) : null,
     canClosePane ? el("button", { class: "pane-action", title: "Close group", onclick: () => store.closePane(pane.id) }, ["✕"]) : null,
@@ -449,7 +485,7 @@ function renderToolbar(store: Store, pane: PaneState, tab: TabState): HTMLElemen
       el("input", {
         class: "field-input field-addr field-mono",
         value: tab.hostAddr,
-        "data-focus-key": `pane:${pane.id}:addr`,
+        "data-focus-key": `tab:${tab.id}:addr`,
         oninput: (e: Event) => store.updateActiveTabInPane(pane.id, { hostAddr: (e.target as HTMLInputElement).value }),
       }),
     ]),
@@ -458,7 +494,7 @@ function renderToolbar(store: Store, pane: PaneState, tab: TabState): HTMLElemen
       el("input", {
         class: "field-input field-port field-mono",
         value: tab.hostPort,
-        "data-focus-key": `pane:${pane.id}:port`,
+        "data-focus-key": `tab:${tab.id}:port`,
         oninput: (e: Event) => store.updateActiveTabInPane(pane.id, { hostPort: (e.target as HTMLInputElement).value }),
       }),
     ]),
@@ -473,7 +509,7 @@ function renderToolbar(store: Store, pane: PaneState, tab: TabState): HTMLElemen
           el("input", {
             class: "field-input field-v3-user",
             value: tab.v3User,
-            "data-focus-key": `pane:${pane.id}:v3user`,
+            "data-focus-key": `tab:${tab.id}:v3user`,
             oninput: (e: Event) => store.updateActiveTabInPane(pane.id, { v3User: (e.target as HTMLInputElement).value }),
           }),
         ]),
@@ -483,7 +519,7 @@ function renderToolbar(store: Store, pane: PaneState, tab: TabState): HTMLElemen
             type: "password",
             class: "field-input field-v3-secret",
             value: tab.v3Auth,
-            "data-focus-key": `pane:${pane.id}:v3auth`,
+            "data-focus-key": `tab:${tab.id}:v3auth`,
             oninput: (e: Event) => store.updateActiveTabInPane(pane.id, { v3Auth: (e.target as HTMLInputElement).value }),
           }),
         ]),
@@ -493,7 +529,7 @@ function renderToolbar(store: Store, pane: PaneState, tab: TabState): HTMLElemen
             type: "password",
             class: "field-input field-v3-secret",
             value: tab.v3Priv,
-            "data-focus-key": `pane:${pane.id}:v3priv`,
+            "data-focus-key": `tab:${tab.id}:v3priv`,
             oninput: (e: Event) => store.updateActiveTabInPane(pane.id, { v3Priv: (e.target as HTMLInputElement).value }),
           }),
         ]),
@@ -506,7 +542,7 @@ function renderToolbar(store: Store, pane: PaneState, tab: TabState): HTMLElemen
         el("input", {
           class: "field-input field-community field-mono",
           value: tab.community,
-          "data-focus-key": `pane:${pane.id}:community`,
+          "data-focus-key": `tab:${tab.id}:community`,
           oninput: (e: Event) => store.updateActiveTabInPane(pane.id, { community: (e.target as HTMLInputElement).value }),
         }),
       ]),
@@ -544,7 +580,7 @@ function renderToolbar(store: Store, pane: PaneState, tab: TabState): HTMLElemen
             store.toggleRefreshMenu(pane.id, rect.right - 172, rect.bottom + 4);
           },
         },
-        [tab.autoRefresh ? autoRefreshRingIcon(store.autoRefreshFraction(tab.id) ?? 1) : chevronDownIcon()],
+        [tab.autoRefresh ? autoRefreshRingIcon(tab.id, store.autoRefreshFraction(tab.id) ?? 1) : chevronDownIcon()],
       ),
     ]),
   );
@@ -572,14 +608,14 @@ function renderTableToolbar(store: Store, pane: PaneState, tab: TabState): HTMLE
   }
   children.push(el("div", { class: "spacer" }));
   children.push(
-    el("label", { class: "toggle-label", onclick: () => store.toggleDiffMode(pane.id) }, [
+    el("label", { class: "toggle-label", title: "Highlight rows added, removed, or changed since the previous fetch", onclick: () => store.toggleDiffMode(pane.id) }, [
       el("div", { class: "toggle-track" + (tab.diffMode ? " on" : "") }, [el("div", { class: "toggle-knob" })]),
       "Diff mode",
     ]),
   );
   children.push(
-    el("label", { class: "toggle-label", title: "Show column headers as e.g. \"Local Hostname\" instead of the raw MIB identifier", onclick: () => store.toggleHumanReadableColumns() }, [
-      el("div", { class: "toggle-track" + (store.state.humanReadableColumns ? " on" : "") }, [el("div", { class: "toggle-knob" })]),
+    el("label", { class: "toggle-label", title: "Show column headers as e.g. \"Local Hostname\" instead of the raw MIB identifier", onclick: () => store.toggleHumanReadableColumns(pane.id) }, [
+      el("div", { class: "toggle-track" + (tab.humanReadableColumns ? " on" : "") }, [el("div", { class: "toggle-knob" })]),
       "Readable names",
     ]),
   );
@@ -589,10 +625,10 @@ function renderTableToolbar(store: Store, pane: PaneState, tab: TabState): HTMLE
       {
         class: "toggle-label",
         title: 'Show values with a DISPLAY-HINT formatted (e.g. 123 -> 12.3) instead of raw',
-        onclick: () => store.toggleUseDisplayHints(),
+        onclick: () => store.toggleUseDisplayHints(pane.id),
       },
       [
-        el("div", { class: "toggle-track" + (store.state.useDisplayHints ? " on" : "") }, [el("div", { class: "toggle-knob" })]),
+        el("div", { class: "toggle-track" + (tab.useDisplayHints ? " on" : "") }, [el("div", { class: "toggle-knob" })]),
         "Display hint",
       ],
     ),
@@ -694,8 +730,8 @@ function renderTable(store: Store, pane: PaneState, tab: TabState): HTMLElement 
     return el("div", { class: "table-scroll" }, [el("div", { class: "table-empty" }, [tab.fetchError ?? "No data yet - click Fetch."])]);
   }
 
-  const columnLabels = store.state.humanReadableColumns ? humanizeColumnNames(tab.columns) : null;
-  const displayHints = store.state.useDisplayHints ? tab.displayHints : null;
+  const columnLabels = tab.humanReadableColumns ? humanizeColumnNames(tab.columns) : null;
+  const displayHints = tab.useDisplayHints ? tab.displayHints : null;
 
   const headRow = el(
     "tr",
@@ -761,14 +797,256 @@ function renderEmptyPane(): HTMLElement {
 function renderPane(store: Store, pane: PaneState, isLast: boolean): HTMLElement {
   const tab = store.getPaneActiveTab(pane);
   const flexCss = isLast ? "1 1 0%" : `0 0 ${pane.width}px`;
-  const body = tab
-    ? [renderToolbar(store, pane, tab), renderTableToolbar(store, pane, tab), renderTable(store, pane, tab), renderStatusBar(tab)]
-    : [renderEmptyPane()];
+  let body: HTMLElement[];
+  if (!tab) {
+    body = [renderEmptyPane()];
+  } else if (tab.kind === "trap") {
+    body = [renderTrapToolbar(store, pane, tab), renderTrapTable(store, pane, tab)];
+  } else {
+    body = [renderToolbar(store, pane, tab), renderTableToolbar(store, pane, tab), renderTable(store, pane, tab), renderStatusBar(tab)];
+  }
   return el(
     "div",
     { class: "pane", style: { flex: flexCss }, onclick: () => store.focusPane(pane.id) },
     [renderTabBar(store, pane), ...body],
   );
+}
+
+// ---------- Trap listener tab ----------
+
+function renderTrapToolbar(store: Store, pane: PaneState, tab: TrapTabState): HTMLElement {
+  const isV3 = tab.version === "v3";
+
+  const versionRow = el(
+    "div",
+    { class: "version-toggle" },
+    (["v1", "v2c", "v3"] as SnmpVersion[]).map((v) =>
+      el(
+        "button",
+        {
+          class: "version-btn" + (tab.version === v ? " active" : ""),
+          disabled: tab.running,
+          onclick: () => store.setTrapVersion(pane.id, v),
+        },
+        [v],
+      ),
+    ),
+  );
+
+  const fields: HTMLElement[] = [
+    el("div", { class: "field" }, [
+      el("label", { class: "field-label" }, ["Bind Address"]),
+      el("input", {
+        class: "field-input field-addr field-mono",
+        value: tab.bindAddr,
+        disabled: tab.running,
+        "data-focus-key": `trap:${tab.id}:addr`,
+        oninput: (e: Event) => store.updateActiveTrapTabInPane(pane.id, { bindAddr: (e.target as HTMLInputElement).value }),
+      }),
+    ]),
+    el("div", { class: "field" }, [
+      el("label", { class: "field-label" }, ["Port"]),
+      el("input", {
+        class: "field-input field-port field-mono",
+        value: tab.port,
+        disabled: tab.running,
+        "data-focus-key": `trap:${tab.id}:port`,
+        oninput: (e: Event) => store.updateActiveTrapTabInPane(pane.id, { port: (e.target as HTMLInputElement).value }),
+      }),
+    ]),
+    el("div", { class: "field" }, [el("label", { class: "field-label" }, ["Version"]), versionRow]),
+  ];
+
+  if (isV3) {
+    fields.push(
+      el("div", { class: "v3-fields" }, [
+        el("div", { class: "field" }, [
+          el("label", { class: "field-label" }, ["Security User"]),
+          el("input", {
+            class: "field-input field-v3-user",
+            value: tab.v3User,
+            disabled: tab.running,
+            "data-focus-key": `trap:${tab.id}:v3user`,
+            oninput: (e: Event) => store.updateActiveTrapTabInPane(pane.id, { v3User: (e.target as HTMLInputElement).value }),
+          }),
+        ]),
+        el("div", { class: "field" }, [
+          el("label", { class: "field-label" }, ["Auth"]),
+          el("input", {
+            type: "password",
+            class: "field-input field-v3-secret",
+            value: tab.v3Auth,
+            disabled: tab.running,
+            "data-focus-key": `trap:${tab.id}:v3auth`,
+            oninput: (e: Event) => store.updateActiveTrapTabInPane(pane.id, { v3Auth: (e.target as HTMLInputElement).value }),
+          }),
+        ]),
+        el("div", { class: "field" }, [
+          el("label", { class: "field-label" }, ["Priv"]),
+          el("input", {
+            type: "password",
+            class: "field-input field-v3-secret",
+            value: tab.v3Priv,
+            disabled: tab.running,
+            "data-focus-key": `trap:${tab.id}:v3priv`,
+            oninput: (e: Event) => store.updateActiveTrapTabInPane(pane.id, { v3Priv: (e.target as HTMLInputElement).value }),
+          }),
+        ]),
+      ]),
+    );
+  } else {
+    fields.push(
+      el("div", { class: "field" }, [
+        el("label", { class: "field-label" }, ["Community (blank = any)"]),
+        el("input", {
+          class: "field-input field-community field-mono",
+          value: tab.community,
+          disabled: tab.running,
+          "data-focus-key": `trap:${tab.id}:community`,
+          oninput: (e: Event) => store.updateActiveTrapTabInPane(pane.id, { community: (e.target as HTMLInputElement).value }),
+        }),
+      ]),
+    );
+  }
+
+  fields.push(el("div", { class: "spacer" }));
+  fields.push(
+    el(
+      "button",
+      {
+        class: "split-btn-main" + (tab.running ? " trap-stop-btn" : ""),
+        style: { borderRadius: "7px", alignSelf: "flex-end" },
+        onclick: () => (tab.running ? store.stopTrapListenerTab(pane.id) : store.startTrapListener(pane.id)),
+      },
+      [tab.running ? "Stop" : "Listen"],
+    ),
+  );
+
+  const statusText = tab.startError ? `Error: ${tab.startError}` : tab.running ? `Listening on ${tab.boundAddr}` : "Stopped";
+  const statusRow = el("div", { class: "toolbar-row trap-status-row" }, [
+    el("div", { class: "status-conn", title: tab.startError ?? undefined }, [
+      el("span", { class: "status-conn-dot" + (tab.startError ? " error" : tab.running ? "" : " off") }),
+      statusText,
+    ]),
+    el("div", {}, [`${tab.events.length} trap${tab.events.length === 1 ? "" : "s"}`]),
+    el("input", {
+      class: "field-input trap-filter",
+      placeholder: "Filter by source, community/user, or trap name…",
+      value: tab.filterText,
+      "data-focus-key": `trap:${tab.id}:filter`,
+      oninput: (e: Event) => store.setTrapFilter(pane.id, (e.target as HTMLInputElement).value),
+    }),
+    el(
+      "label",
+      { class: "toggle-label", title: "Pause merging newly received traps into the list below (the listener keeps running)", onclick: () => store.toggleTrapPaused(pane.id) },
+      [el("div", { class: "toggle-track" + (tab.paused ? "" : " on") }, [el("div", { class: "toggle-knob" })]), "Live"],
+    ),
+    el("button", { class: "trap-clear-btn", onclick: () => void store.clearTraps(pane.id) }, ["Clear"]),
+  ]);
+
+  const ipHint =
+    store.localIps.length > 0
+      ? el("div", { class: "trap-ip-hint" }, [
+          "Point the device's trap destination at: ",
+          ...store.localIps.map((ip) => el("code", { class: "trap-ip-chip" }, [ip])),
+        ])
+      : null;
+
+  return el("div", { class: "toolbar" }, [el("div", { class: "toolbar-row" }, fields), ipHint, statusRow]);
+}
+
+function formatTrapTime(ms: number): string {
+  return new Date(ms).toLocaleTimeString();
+}
+
+function trapMatchesFilter(e: TrapEvent, filter: string): boolean {
+  const needle = filter.trim().toLowerCase();
+  if (!needle) return true;
+  if (e.source.toLowerCase().includes(needle)) return true;
+  if (e.principal.toLowerCase().includes(needle)) return true;
+  if (e.trapType.toLowerCase().includes(needle)) return true;
+  if (e.trapOid.includes(needle)) return true;
+  return e.varbinds.some((v) => v.name.toLowerCase().includes(needle) || v.oid.includes(needle) || v.value.toLowerCase().includes(needle));
+}
+
+function renderTrapVarbindRow(v: TrapVarbind): HTMLElement {
+  return el("div", { class: "trap-varbind-row" }, [
+    el("span", { class: "trap-varbind-name", title: v.oid }, [v.name]),
+    el("span", { class: "trap-varbind-value" }, [v.value || "(empty)"]),
+  ]);
+}
+
+function renderTrapRow(store: Store, pane: PaneState, tab: TrapTabState, e: TrapEvent): HTMLElement[] {
+  if (e.error) {
+    return [
+      el("tr", { class: "trap-row trap-row-error" }, [
+        el("td", {}, [formatTrapTime(e.timeMs)]),
+        el("td", { class: "field-mono" }, [e.source]),
+        el("td", { colspan: 3 }, [`⚠ ${e.error}`]),
+      ]),
+    ];
+  }
+
+  const expanded = tab.expandedSeq === e.seq;
+  const rows: HTMLElement[] = [
+    el(
+      "tr",
+      { class: "trap-row" + (expanded ? " expanded" : ""), onclick: () => store.toggleTrapExpanded(pane.id, e.seq) },
+      [
+        el("td", {}, [formatTrapTime(e.timeMs)]),
+        el("td", { class: "field-mono" }, [e.source]),
+        el("td", {}, [e.version.replace(/^SNMP/, "")]),
+        el("td", {}, [e.principal]),
+        el("td", {}, [
+          e.trapType,
+          e.confirmed
+            ? el(
+                "span",
+                {
+                  class: "trap-confirmed-badge",
+                  title: "SNMPv2c/v3 Inform - this listener doesn't send the acknowledgement RFC 3416 expects, so the sender will keep retransmitting it",
+                },
+                ["INFORM"],
+              )
+            : null,
+        ]),
+      ],
+    ),
+  ];
+  if (expanded) {
+    rows.push(
+      el("tr", { class: "trap-detail-row" }, [
+        el("td", { colspan: 5 }, [
+          el("div", { class: "trap-varbinds" }, [
+            el("div", { class: "trap-varbind-header" }, [`Trap OID: ${e.trapOid || "(none)"}`]),
+            ...e.varbinds.map(renderTrapVarbindRow),
+          ]),
+        ]),
+      ]),
+    );
+  }
+  return rows;
+}
+
+function renderTrapTable(store: Store, pane: PaneState, tab: TrapTabState): HTMLElement {
+  const events = tab.events.filter((e) => trapMatchesFilter(e, tab.filterText)).reverse();
+  if (events.length === 0) {
+    const empty = tab.events.length > 0 ? "No traps match the filter." : tab.running ? "No traps received yet." : "Not listening - click Listen to start.";
+    return el("div", { class: "table-scroll" }, [el("div", { class: "table-empty" }, [empty])]);
+  }
+
+  const headRow = el("tr", {}, [
+    el("th", {}, ["Time"]),
+    el("th", {}, ["Source"]),
+    el("th", {}, ["Ver"]),
+    el("th", {}, ["Community / User"]),
+    el("th", {}, ["Trap"]),
+  ]);
+  const rows = events.flatMap((e) => renderTrapRow(store, pane, tab, e));
+
+  return el("div", { class: "table-scroll" }, [
+    el("table", { class: "data-table trap-table" }, [el("thead", {}, [headRow]), el("tbody", {}, rows)]),
+  ]);
 }
 
 function renderPaneGroup(store: Store): HTMLElement {

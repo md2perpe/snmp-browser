@@ -1,6 +1,7 @@
 import { invoke, isTauri, pickDirectory } from "./api";
 import { DEFAULT_COL_WIDTH, mockHostProfiles } from "./mockData";
 import type {
+  AnyTabState,
   AppState,
   HostProfile,
   MibNode,
@@ -12,6 +13,9 @@ import type {
   RowMetaEntry,
   SnmpVersion,
   TabState,
+  TrapEvent,
+  TrapListenerStatus,
+  TrapTabState,
 } from "./types";
 
 type Patch<T> = Partial<T> | ((t: T) => Partial<T>);
@@ -21,17 +25,25 @@ const AUTO_REFRESH_INTERVAL_MS = 10_000;
 const ROW_KEY_FIELD = "Index";
 const DEFAULT_SNMP_PORT = "161";
 const DEFAULT_SNMP_COMMUNITY = "public";
+const DEFAULT_TRAP_PORT = "162";
+const TRAP_POLL_INTERVAL_MS = 1000;
+/** Client-side mirror of the server's per-listener ring buffer cap (see `trap.rs::MAX_EVENTS`), so a long-idle tab's array doesn't grow unbounded. */
+const MAX_CLIENT_TRAP_EVENTS = 2000;
 
 export class Store {
   state: AppState;
   hostProfiles: HostProfile[] = mockHostProfiles;
   tree: MibNode[] = [];
   tablesTree: MibNode[] = [];
+  /** This machine's non-loopback IPv4 addresses, for the trap listener's "point your device here" hint. Empty until a trap tab has been opened at least once. */
+  localIps: string[] = [];
 
   private listeners: Array<() => void> = [];
+  private tickListeners: Array<() => void> = [];
   private autoRefreshTimers = new Map<string, ReturnType<typeof setInterval>>();
   /** Epoch ms of each auto-refreshing tab's next fetch, for the countdown ring. */
   private autoRefreshNextAt = new Map<string, number>();
+  private trapPollTimers = new Map<string, ReturnType<typeof setInterval>>();
   /** Ticks re-renders while any tab is auto-refreshing, so the countdown ring animates. */
   private uiTickTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -40,8 +52,6 @@ export class Store {
       expanded: {},
       selectedTreeNodeId: "",
       tablesOnlyMode: false,
-      humanReadableColumns: false,
-      useDisplayHints: false,
       mibProfiles: [],
       activeMibProfileId: "",
       mibDirDraft: null,
@@ -82,6 +92,17 @@ export class Store {
     this.listeners.push(fn);
   }
 
+  /**
+   * Registers a callback for the lightweight countdown-ring tick (every
+   * 200ms while any tab is auto-refreshing). Unlike onChange, this must NOT
+   * trigger a full re-render: replacing the whole DOM tree that often would
+   * intermittently swallow clicks, since a mousedown/mouseup pair that
+   * straddles a rebuild loses its target element mid-click.
+   */
+  onTick(fn: () => void) {
+    this.tickListeners.push(fn);
+  }
+
   private notify() {
     for (const fn of this.listeners) fn();
   }
@@ -93,6 +114,7 @@ export class Store {
     // none are configured at all) - the fields are freely editable either way.
     const h = this.hostProfiles.find((p) => p.id === hostId) ?? this.hostProfiles[0];
     return {
+      kind: "query",
       id,
       hostId: h?.id ?? "",
       hostAddr: h?.addr ?? "",
@@ -111,10 +133,35 @@ export class Store {
       autoRefresh: false,
       lastFetch: "",
       diffMode: false,
+      humanReadableColumns: false,
+      useDisplayHints: false,
       workingRows: [],
       rowMeta: {},
       removedGhosts: [],
       fetchError: null,
+      ...opts,
+    };
+  }
+
+  makeTrapTab(id: string, opts: Partial<TrapTabState> = {}): TrapTabState {
+    return {
+      kind: "trap",
+      id,
+      bindAddr: "0.0.0.0",
+      port: DEFAULT_TRAP_PORT,
+      version: "v2c",
+      community: "",
+      v3User: "",
+      v3Auth: "",
+      v3Priv: "",
+      running: false,
+      boundAddr: "",
+      startError: null,
+      events: [],
+      lastSeq: 0,
+      paused: false,
+      expandedSeq: null,
+      filterText: "",
       ...opts,
     };
   }
@@ -127,10 +174,10 @@ export class Store {
   getActivePane(): PaneState {
     return this.getPane(this.state.activePaneId) ?? this.state.panes[0];
   }
-  getPaneActiveTab(pane: PaneState): TabState | undefined {
+  getPaneActiveTab(pane: PaneState): AnyTabState | undefined {
     return pane.tabs.find((t) => t.id === pane.activeTabId) ?? pane.tabs[0];
   }
-  getActiveTab(): TabState | undefined {
+  getActiveTab(): AnyTabState | undefined {
     return this.getPaneActiveTab(this.getActivePane());
   }
 
@@ -143,7 +190,16 @@ export class Store {
     const pane = this.getPane(paneId);
     if (!pane) return;
     const tab = this.getPaneActiveTab(pane);
-    if (!tab) return;
+    if (!tab || tab.kind !== "query") return;
+    this.applyPatch(tab, patch);
+    this.notify();
+  }
+
+  updateActiveTrapTabInPane(paneId: string, patch: Patch<TrapTabState>) {
+    const pane = this.getPane(paneId);
+    if (!pane) return;
+    const tab = this.getPaneActiveTab(pane);
+    if (!tab || tab.kind !== "trap") return;
     this.applyPatch(tab, patch);
     this.notify();
   }
@@ -189,10 +245,37 @@ export class Store {
     this.notify();
   }
 
+  /** Opens a new, not-yet-listening trap listener tab in the given pane. */
+  openTrapListenerTab(paneId: string) {
+    const pane = this.getPane(paneId);
+    if (!pane) return;
+    const tab = this.makeTrapTab("tab" + Date.now());
+    pane.tabs.push(tab);
+    pane.activeTabId = tab.id;
+    this.state.activePaneId = paneId;
+    this.notify();
+    void this.refreshLocalIps();
+  }
+
+  /** Refreshes the cached local IP list shown as a trap-destination hint - cheap enough to just re-fetch on each trap tab open, in case the machine switched networks since launch. */
+  private async refreshLocalIps() {
+    try {
+      this.localIps = await invoke<string[]>("local_ips");
+      this.notify();
+    } catch {
+      // Leave the previous (possibly empty) list in place.
+    }
+  }
+
   closeTabInPane(paneId: string, tabId: string) {
     const pane = this.getPane(paneId);
     if (!pane) return;
     this.stopAutoRefresh(tabId);
+    const tab = pane.tabs.find((t) => t.id === tabId);
+    if (tab?.kind === "trap") {
+      this.stopTrapPolling(tabId);
+      if (tab.running) void invoke("stop_trap_listener", { id: tabId });
+    }
     pane.tabs = pane.tabs.filter((t) => t.id !== tabId);
     if (pane.activeTabId === tabId) {
       pane.activeTabId = pane.tabs.length ? pane.tabs[pane.tabs.length - 1].id : null;
@@ -205,19 +288,28 @@ export class Store {
     const pane = this.getPane(paneId);
     if (!pane) return;
     const sourceTab = this.getPaneActiveTab(pane);
-    const newTab: TabState | null = sourceTab ? { ...sourceTab, id: "tab" + Date.now() } : null;
+    let newTab: AnyTabState | null = sourceTab ? { ...sourceTab, id: "tab" + Date.now() } : null;
+    // A duplicated trap tab doesn't inherit a live backend listener (there isn't one
+    // registered under its new id yet), so it starts out as a fresh, stopped copy.
+    if (newTab?.kind === "trap") newTab = { ...newTab, running: false, boundAddr: "", startError: null, events: [], lastSeq: 0, expandedSeq: null };
     pane.width = 620;
     const newPane: PaneState = { id: "pane" + Date.now(), width: null, tabs: newTab ? [newTab] : [], activeTabId: newTab?.id ?? null };
     this.state.panes.push(newPane);
     this.state.activePaneId = newPane.id;
-    if (newTab?.autoRefresh) this.startAutoRefresh(newPane.id, newTab.id);
+    if (newTab?.kind === "query" && newTab.autoRefresh) this.startAutoRefresh(newPane.id, newTab.id);
     this.notify();
   }
 
   closePane(paneId: string) {
     if (this.state.panes.length <= 1) return;
     const pane = this.getPane(paneId);
-    pane?.tabs.forEach((t) => this.stopAutoRefresh(t.id));
+    pane?.tabs.forEach((t) => {
+      this.stopAutoRefresh(t.id);
+      if (t.kind === "trap") {
+        this.stopTrapPolling(t.id);
+        if (t.running) void invoke("stop_trap_listener", { id: t.id });
+      }
+    });
     this.state.panes = this.state.panes.filter((p) => p.id !== paneId);
     if (this.state.panes.length === 1) this.state.panes[0].width = null;
     if (this.state.activePaneId === paneId) {
@@ -257,16 +349,6 @@ export class Store {
 
   setTablesOnlyMode(value: boolean) {
     this.state.tablesOnlyMode = value;
-    this.notify();
-  }
-
-  toggleHumanReadableColumns() {
-    this.state.humanReadableColumns = !this.state.humanReadableColumns;
-    this.notify();
-  }
-
-  toggleUseDisplayHints() {
-    this.state.useDisplayHints = !this.state.useDisplayHints;
     this.notify();
   }
 
@@ -455,6 +537,10 @@ export class Store {
     this.updateActiveTabInPane(paneId, { version });
   }
 
+  setTrapVersion(paneId: string, version: SnmpVersion) {
+    this.updateActiveTrapTabInPane(paneId, { version });
+  }
+
   // ---------- table ----------
 
   setSortCol(paneId: string, col: string) {
@@ -506,11 +592,19 @@ export class Store {
     this.updateActiveTabInPane(paneId, (t) => ({ diffMode: !t.diffMode }));
   }
 
+  toggleHumanReadableColumns(paneId: string) {
+    this.updateActiveTabInPane(paneId, (t) => ({ humanReadableColumns: !t.humanReadableColumns }));
+  }
+
+  toggleUseDisplayHints(paneId: string) {
+    this.updateActiveTabInPane(paneId, (t) => ({ useDisplayHints: !t.useDisplayHints }));
+  }
+
   setAutoRefresh(paneId: string, value: boolean) {
     this.state.refreshMenu = null;
     const pane = this.getPane(paneId);
     const tab = pane && this.getPaneActiveTab(pane);
-    if (tab && tab.autoRefresh !== value) {
+    if (tab && tab.kind === "query" && tab.autoRefresh !== value) {
       tab.autoRefresh = value;
       if (value) this.startAutoRefresh(paneId, tab.id);
       else this.stopAutoRefresh(tab.id);
@@ -523,7 +617,11 @@ export class Store {
     this.autoRefreshNextAt.set(tabId, Date.now() + AUTO_REFRESH_INTERVAL_MS);
     const timer = setInterval(() => void this.fetchForTab(paneId, tabId), AUTO_REFRESH_INTERVAL_MS);
     this.autoRefreshTimers.set(tabId, timer);
-    if (!this.uiTickTimer) this.uiTickTimer = setInterval(() => this.notify(), 200);
+    if (!this.uiTickTimer) {
+      this.uiTickTimer = setInterval(() => {
+        for (const fn of this.tickListeners) fn();
+      }, 200);
+    }
   }
 
   private stopAutoRefresh(tabId: string) {
@@ -549,7 +647,7 @@ export class Store {
   private async fetchForTab(paneId: string, tabId: string) {
     const pane = this.getPane(paneId);
     const tab = pane?.tabs.find((t) => t.id === tabId);
-    if (!pane || !tab) {
+    if (!pane || !tab || tab.kind !== "query") {
       this.stopAutoRefresh(tabId);
       return;
     }
@@ -563,7 +661,7 @@ export class Store {
     const pane = this.getPane(paneId);
     if (!pane) return;
     const tab = this.getPaneActiveTab(pane);
-    if (!tab) return;
+    if (!tab || tab.kind !== "query") return;
     await this.runFetch(tab);
     this.notify();
   }
@@ -634,5 +732,111 @@ export class Store {
       meta[this.rowKey(r)] = { status: "removed" };
     });
     return { meta, removed };
+  }
+
+  // ---------- trap listener ----------
+
+  /** Starts (or re-starts after a failed attempt) the active trap tab's backend listener. */
+  async startTrapListener(paneId: string) {
+    const pane = this.getPane(paneId);
+    const tab = pane && this.getPaneActiveTab(pane);
+    if (!tab || tab.kind !== "trap") return;
+    try {
+      const status = await invoke<TrapListenerStatus>("start_trap_listener", {
+        id: tab.id,
+        config: {
+          bindAddr: tab.bindAddr,
+          port: tab.port,
+          version: tab.version,
+          community: tab.community,
+          v3User: tab.v3User,
+          v3Auth: tab.v3Auth,
+          v3Priv: tab.v3Priv,
+        },
+      });
+      tab.running = status.running;
+      tab.boundAddr = status.boundAddr;
+      tab.startError = null;
+      this.startTrapPolling(tab.id);
+    } catch (e) {
+      tab.startError = String(e);
+    }
+    this.notify();
+  }
+
+  async stopTrapListenerTab(paneId: string) {
+    const pane = this.getPane(paneId);
+    const tab = pane && this.getPaneActiveTab(pane);
+    if (!tab || tab.kind !== "trap") return;
+    this.stopTrapPolling(tab.id);
+    await invoke("stop_trap_listener", { id: tab.id });
+    tab.running = false;
+    tab.boundAddr = "";
+    this.notify();
+  }
+
+  /** Clears a trap tab's received events, both locally and in the backend's ring buffer. */
+  async clearTraps(paneId: string) {
+    const pane = this.getPane(paneId);
+    const tab = pane && this.getPaneActiveTab(pane);
+    if (!tab || tab.kind !== "trap") return;
+    tab.events = [];
+    tab.expandedSeq = null;
+    this.notify();
+    await invoke("clear_traps", { id: tab.id });
+  }
+
+  toggleTrapExpanded(paneId: string, seq: number) {
+    this.updateActiveTrapTabInPane(paneId, (t) => ({ expandedSeq: t.expandedSeq === seq ? null : seq }));
+  }
+
+  setTrapFilter(paneId: string, text: string) {
+    this.updateActiveTrapTabInPane(paneId, { filterText: text });
+  }
+
+  toggleTrapPaused(paneId: string) {
+    this.updateActiveTrapTabInPane(paneId, (t) => ({ paused: !t.paused }));
+  }
+
+  private startTrapPolling(tabId: string) {
+    this.stopTrapPolling(tabId);
+    const timer = setInterval(() => void this.pollTrapTab(tabId), TRAP_POLL_INTERVAL_MS);
+    this.trapPollTimers.set(tabId, timer);
+  }
+
+  private stopTrapPolling(tabId: string) {
+    const timer = this.trapPollTimers.get(tabId);
+    if (timer != null) {
+      clearInterval(timer);
+      this.trapPollTimers.delete(tabId);
+    }
+  }
+
+  /** Finds a trap tab by id across every pane - the poll timer only knows the tab id, not which pane it's in. */
+  private findTrapTab(tabId: string): TrapTabState | undefined {
+    for (const pane of this.state.panes) {
+      const t = pane.tabs.find((t) => t.id === tabId);
+      if (t && t.kind === "trap") return t;
+    }
+    return undefined;
+  }
+
+  private async pollTrapTab(tabId: string) {
+    const tab = this.findTrapTab(tabId);
+    if (!tab) {
+      this.stopTrapPolling(tabId);
+      return;
+    }
+    if (!tab.running || tab.paused) return;
+    try {
+      const events = await invoke<TrapEvent[]>("poll_traps", { id: tabId, afterSeq: tab.lastSeq });
+      if (events.length === 0) return;
+      tab.events = [...tab.events, ...events];
+      if (tab.events.length > MAX_CLIENT_TRAP_EVENTS) tab.events = tab.events.slice(tab.events.length - MAX_CLIENT_TRAP_EVENTS);
+      tab.lastSeq = events[events.length - 1].seq;
+      this.notify();
+    } catch {
+      // Transient poll failure (e.g. a mid-request app restart) - retried on the next tick.
+    }
   }
 }

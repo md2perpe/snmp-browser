@@ -1,5 +1,5 @@
 import { renderPreservingFocus } from "./dom";
-import { renderApp } from "./render";
+import { renderApp, updateAutoRefreshRings } from "./render";
 import { Store } from "./state";
 
 const store = new Store();
@@ -11,6 +11,7 @@ function render() {
 }
 
 store.onChange(render);
+store.onTick(() => updateAutoRefreshRings(store, root!));
 render();
 void store.init();
 

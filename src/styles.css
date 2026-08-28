@@ -948,3 +948,120 @@ table.data-table {
 .status-conn-dot.error {
   background: var(--red);
 }
+.status-conn-dot.off {
+  background: var(--text-dimmer);
+}
+
+/* ---------- Trap listener tab ---------- */
+
+.tab-dot.off {
+  background: var(--text-dimmer);
+}
+.tab-dot.error {
+  background: var(--red);
+}
+
+.trap-ip-hint {
+  font-size: 11px;
+  color: var(--text-dim);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.trap-ip-chip {
+  background: var(--bg-chip);
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  padding: 1px 6px;
+  color: var(--text-secondary);
+  font-family: ui-monospace, Menlo, monospace;
+}
+
+.trap-status-row {
+  align-items: center;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.trap-filter {
+  width: 240px;
+  height: 26px;
+}
+.trap-clear-btn {
+  height: 24px;
+  padding: 0 10px;
+  border-radius: 5px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-chip);
+  color: var(--text-muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+.trap-clear-btn:hover {
+  color: var(--text-primary);
+}
+.trap-stop-btn {
+  background: var(--red) !important;
+}
+
+table.trap-table {
+  width: 100%;
+  table-layout: auto;
+}
+.trap-row {
+  cursor: pointer;
+}
+.trap-row:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+.trap-row.expanded {
+  background: var(--accent-hover);
+}
+.trap-row-error {
+  color: var(--red);
+  cursor: default;
+}
+.trap-confirmed-badge {
+  margin-left: 8px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  color: var(--yellow);
+  border: 1px solid var(--yellow);
+  border-radius: 3px;
+  padding: 1px 4px;
+}
+.trap-detail-row {
+  background: var(--bg-deep);
+}
+.trap-varbinds {
+  padding: 10px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.trap-varbind-header {
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--text-dim);
+  font-family: ui-monospace, Menlo, monospace;
+  margin-bottom: 4px;
+}
+.trap-varbind-row {
+  display: flex;
+  gap: 12px;
+  font-size: 11px;
+}
+.trap-varbind-name {
+  flex: none;
+  width: 220px;
+  color: var(--text-secondary);
+  font-family: ui-monospace, Menlo, monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.trap-varbind-value {
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
