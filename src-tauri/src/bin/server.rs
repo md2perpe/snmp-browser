@@ -5,15 +5,16 @@
 //! with CORS enabled so a Vite dev server on a different port can call it.
 
 use serde_json::{json, Value};
-use snmp_mib_client_lib::{mib, settings, snmp};
+use snmp_mib_client_lib::{mib, settings, snmp, trap};
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use tiny_http::{Header, Method, Response, Server};
 
 struct AppState {
     settings_path: PathBuf,
     settings: Mutex<settings::Settings>,
     last_parse: Mutex<Option<mib::ParseResult>>,
+    trap_state: trap::TrapState,
 }
 
 impl AppState {
@@ -168,6 +169,42 @@ fn handle(state: &AppState, cmd: &str, args: &Value) -> Result<Value, (u16, Stri
             result.map(|r| serde_json::to_value(&r).unwrap()).map_err(|e| (400, e))
         }
 
+        "start_trap_listener" => {
+            let id = args.get("id").and_then(Value::as_str).ok_or((400, "missing 'id'".to_string()))?.to_string();
+            let config: trap::TrapListenerConfig = serde_json::from_value(
+                args.get("config").cloned().ok_or((400, "missing 'config'".to_string()))?,
+            )
+            .map_err(|e| (400, e.to_string()))?;
+
+            let dirs = state.settings.lock().unwrap().active_profile().map(|p| p.dirs.clone()).unwrap_or_default();
+            let mut cache = state.last_parse.lock().unwrap();
+            if cache.is_none() {
+                *cache = Some(mib::parse_directories(&dirs));
+            }
+            let oid_index = Arc::new(mib::build_oid_index(&cache.as_ref().unwrap().tree));
+            state.trap_state.start(id, config, oid_index).map(|r| serde_json::to_value(&r).unwrap()).map_err(|e| (400, e))
+        }
+
+        "stop_trap_listener" => {
+            let id = args.get("id").and_then(Value::as_str).ok_or((400, "missing 'id'".to_string()))?.to_string();
+            state.trap_state.stop(&id);
+            Ok(Value::Null)
+        }
+
+        "poll_traps" => {
+            let id = args.get("id").and_then(Value::as_str).ok_or((400, "missing 'id'".to_string()))?.to_string();
+            let after_seq = args.get("afterSeq").and_then(Value::as_u64).unwrap_or(0);
+            Ok(serde_json::to_value(state.trap_state.poll(&id, after_seq)).unwrap())
+        }
+
+        "clear_traps" => {
+            let id = args.get("id").and_then(Value::as_str).ok_or((400, "missing 'id'".to_string()))?.to_string();
+            state.trap_state.clear(&id);
+            Ok(Value::Null)
+        }
+
+        "local_ips" => Ok(serde_json::to_value(trap::local_ips()).unwrap()),
+
         other => Err((404, format!("unknown command '{other}'"))),
     }
 }
@@ -178,7 +215,7 @@ fn main() {
     let settings = settings::load(&settings_path);
     // Seed a fresh settings.json immediately, matching the Tauri app's setup behavior.
     settings::save(&settings_path, &settings);
-    let state = AppState { settings_path, settings: Mutex::new(settings), last_parse: Mutex::new(None) };
+    let state = AppState { settings_path, settings: Mutex::new(settings), last_parse: Mutex::new(None), trap_state: trap::TrapState::default() };
 
     let server = Server::http(("127.0.0.1", port)).expect("failed to bind HTTP server");
     println!("SNMP MIB Client standalone backend listening on http://127.0.0.1:{port}");

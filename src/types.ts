@@ -57,6 +57,7 @@ export interface RowMetaEntry {
 export type ColWidths = Record<string, number>;
 
 export interface TabState {
+  kind: "query";
   id: string;
   hostId: string;
   hostAddr: string;
@@ -77,11 +78,70 @@ export interface TabState {
   autoRefresh: boolean;
   lastFetch: string;
   diffMode: boolean;
+  /** When true, table column headers show a humanized form (shared prefix stripped, camelCase split into title-cased words) instead of the raw MIB identifier. */
+  humanReadableColumns: boolean;
+  /** When true, numeric values in a column with a DISPLAY-HINT (e.g. "d-1") are shown reformatted (123 -> 12.3) instead of raw. */
+  useDisplayHints: boolean;
   workingRows: Row[];
   rowMeta: Record<string, RowMetaEntry>;
   removedGhosts: Row[];
   fetchError: string | null;
 }
+
+export interface TrapVarbind {
+  oid: string;
+  /** MIB-resolved name (e.g. "ifDescr.3"), or the same as `oid` when nothing matched. */
+  name: string;
+  value: string;
+}
+
+export interface TrapEvent {
+  seq: number;
+  timeMs: number;
+  /** "ip:port" the packet arrived from. */
+  source: string;
+  version: string;
+  /** Community string (v1/v2c) or security user name (v3). */
+  principal: string;
+  trapType: string;
+  trapOid: string;
+  varbinds: TrapVarbind[];
+  /** True for an SNMPv2c/v3 Inform, which RFC 3416 expects to be acknowledged; this listener never sends that ack. */
+  confirmed: boolean;
+  error: string | null;
+}
+
+export interface TrapListenerStatus {
+  running: boolean;
+  boundAddr: string;
+}
+
+export interface TrapTabState {
+  kind: "trap";
+  id: string;
+  bindAddr: string;
+  port: string;
+  version: SnmpVersion;
+  /** v1/v2c only: exact community a packet must carry to be accepted; empty accepts any. */
+  community: string;
+  v3User: string;
+  v3Auth: string;
+  v3Priv: string;
+  running: boolean;
+  /** The actual bound "ip:port" once started (e.g. after binding port 0). */
+  boundAddr: string;
+  /** Set when the last start attempt failed (bad address, port in use, ...). */
+  startError: string | null;
+  events: TrapEvent[];
+  /** Highest event `seq` already merged in, so polling only asks for what's new. */
+  lastSeq: number;
+  /** When true, polling still runs (events keep accumulating server-side) but new events aren't merged into the visible list. */
+  paused: boolean;
+  expandedSeq: number | null;
+  filterText: string;
+}
+
+export type AnyTabState = TabState | TrapTabState;
 
 export interface PaneState {
   id: string;
@@ -89,7 +149,7 @@ export interface PaneState {
   width: number | null;
   /** null when the pane has no tabs open. */
   activeTabId: string | null;
-  tabs: TabState[];
+  tabs: AnyTabState[];
 }
 
 export interface AppState {
@@ -98,10 +158,6 @@ export interface AppState {
   selectedTreeNodeId: string;
   /** When true, the sidebar shows only tables (as roots) with their columns as children, instead of the full group hierarchy. */
   tablesOnlyMode: boolean;
-  /** When true, table column headers show a humanized form (shared prefix stripped, camelCase split into title-cased words) instead of the raw MIB identifier. */
-  humanReadableColumns: boolean;
-  /** When true, numeric values in a column with a DISPLAY-HINT (e.g. "d-1") are shown reformatted (123 -> 12.3) instead of raw. */
-  useDisplayHints: boolean;
   /** Named sets of MIB directories (e.g. one per software release) - only the active one's directories are parsed. */
   mibProfiles: MibProfile[];
   activeMibProfileId: string;

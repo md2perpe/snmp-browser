@@ -85,6 +85,25 @@ pub struct ParseResult {
     pub errors: Vec<FileErrors>,
 }
 
+/// Builds a reverse `oid -> name` index from a parsed tree, for labeling numeric OIDs (e.g.
+/// from a received SNMP trap) with the MIB symbol they belong to. Sorted by arc count
+/// descending so a longest-prefix-match walk (see `resolve_oid` in `trap.rs`) tries the most
+/// specific symbol first - e.g. a table's column before the table itself.
+pub fn build_oid_index(tree: &[MibTreeNode]) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    fn walk(nodes: &[MibTreeNode], out: &mut Vec<(String, String)>) {
+        for n in nodes {
+            if n.resolved && !n.oid.is_empty() {
+                out.push((n.oid.clone(), n.label.clone()));
+            }
+            walk(&n.children, out);
+        }
+    }
+    walk(tree, &mut out);
+    out.sort_by_key(|(oid, _)| std::cmp::Reverse(oid.matches('.').count()));
+    out
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RawKind {
     Group,
