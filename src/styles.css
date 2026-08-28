@@ -976,6 +976,17 @@ table.data-table {
   padding: 1px 6px;
   color: var(--text-secondary);
   font-family: ui-monospace, Menlo, monospace;
+  font-size: inherit;
+  cursor: pointer;
+}
+.trap-ip-chip:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent);
+  color: var(--text-primary);
+}
+.trap-ip-chip.copied {
+  border-color: var(--green);
+  color: var(--green);
 }
 
 .trap-status-row {

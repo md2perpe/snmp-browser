@@ -948,11 +948,24 @@ function renderTrapToolbar(store: Store, pane: PaneState, tab: TrapTabState): HT
     store.localIps.length > 0
       ? el("div", { class: "trap-ip-hint" }, [
           "Point the device's trap destination at: ",
-          ...store.localIps.map((ip) => el("code", { class: "trap-ip-chip" }, [ip])),
+          ...store.localIps.map((ip) => el("button", { class: "trap-ip-chip", title: "Click to copy", onclick: (e: Event) => copyTrapIp(e.currentTarget as HTMLButtonElement, ip) }, [ip])),
         ])
       : null;
 
   return el("div", { class: "toolbar" }, [el("div", { class: "toolbar-row" }, fields), ipHint, statusRow]);
+}
+
+/** Copies an IP chip's text to the clipboard and briefly swaps its label to confirm, reverting after a moment. */
+function copyTrapIp(chip: HTMLButtonElement, ip: string) {
+  void navigator.clipboard.writeText(ip).then(() => {
+    const original = chip.textContent;
+    chip.textContent = "Copied!";
+    chip.classList.add("copied");
+    setTimeout(() => {
+      chip.textContent = original;
+      chip.classList.remove("copied");
+    }, 1000);
+  });
 }
 
 function formatTrapTime(ms: number): string {
