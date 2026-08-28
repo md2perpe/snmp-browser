@@ -13,6 +13,7 @@ import type {
   RowMetaEntry,
   SnmpVersion,
   TabState,
+  Theme,
   TrapEvent,
   TrapListenerStatus,
   TrapTabState,
@@ -29,6 +30,17 @@ const DEFAULT_TRAP_PORT = "162";
 const TRAP_POLL_INTERVAL_MS = 1000;
 /** Client-side mirror of the server's per-listener ring buffer cap (see `trap.rs::MAX_EVENTS`), so a long-idle tab's array doesn't grow unbounded. */
 const MAX_CLIENT_TRAP_EVENTS = 2000;
+const THEME_STORAGE_KEY = "snmpBrowserTheme";
+
+function loadTheme(): Theme {
+  try {
+    const saved = localStorage.getItem(THEME_STORAGE_KEY);
+    if (saved === "dark" || saved === "classic") return saved;
+  } catch {
+    // localStorage unavailable (e.g. a restrictive webview) - fall back to the default.
+  }
+  return "dark";
+}
 
 export class Store {
   state: AppState;
@@ -65,7 +77,10 @@ export class Store {
       activePaneId: "p1",
       treeContextMenu: null,
       refreshMenu: null,
+      theme: loadTheme(),
+      themeMenu: null,
     };
+    this.applyTheme(this.state.theme);
   }
 
   async init() {
@@ -338,6 +353,32 @@ export class Store {
 
   setLeftWidth(width: number) {
     this.state.leftWidth = Math.min(520, Math.max(220, width));
+    this.notify();
+  }
+
+  private applyTheme(theme: Theme) {
+    document.documentElement.setAttribute("data-theme", theme);
+  }
+
+  setTheme(theme: Theme) {
+    this.state.theme = theme;
+    this.state.themeMenu = null;
+    this.applyTheme(theme);
+    try {
+      localStorage.setItem(THEME_STORAGE_KEY, theme);
+    } catch {
+      // localStorage unavailable - the choice just won't survive a restart.
+    }
+    this.notify();
+  }
+
+  toggleThemeMenu(x: number, y: number) {
+    this.state.themeMenu = this.state.themeMenu ? null : { x, y };
+    this.notify();
+  }
+
+  closeThemeMenu() {
+    this.state.themeMenu = null;
     this.notify();
   }
 
