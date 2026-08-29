@@ -9,6 +9,8 @@ on:
 jobs:
   check-version:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     outputs:
       should_release: ${{ steps.check.outputs.should_release }}
       version: ${{ steps.check.outputs.version }}
@@ -17,20 +19,22 @@ jobs:
 
       - id: check
         name: Check whether the app version was stepped
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           VERSION=$(jq -r .version src-tauri/tauri.conf.json)
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
-          # The plain "get release by tag" REST endpoint 404s on drafts,
-          # since a draft release has no underlying git tag yet. `gh
-          # release view` correctly finds drafts too, so use that instead.
-          if gh release view "v$VERSION" >/dev/null 2>&1; then
-            echo "Release v$VERSION already exists (draft or published), skipping."
+          # Draft GitHub releases have no underlying git tag until published,
+          # and the GITHUB_TOKEN can't see draft releases via the API at all
+          # (github.com/cli/cli#3037). So the gate can't check for an existing
+          # release - instead it claims the version by creating and pushing the
+          # tag itself, which is a reliable, draft-independent marker.
+          if git ls-remote --exit-code --tags origin "refs/tags/v$VERSION" >/dev/null 2>&1; then
+            echo "Tag v$VERSION already exists, skipping release."
             echo "should_release=false" >> "$GITHUB_OUTPUT"
           else
-            echo "Release v$VERSION not found, will build and release."
+            echo "Tag v$VERSION not found, claiming it and building the release."
+            git tag "v$VERSION"
+            git push origin "v$VERSION"
             echo "should_release=true" >> "$GITHUB_OUTPUT"
           fi
 
