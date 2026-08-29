@@ -1,25 +1,47 @@
-# CODING AGENTS: READ THIS FIRST
+# SNMP MIB Client
 
-This is a **handoff bundle** from Claude Design (claude.ai/design).
+A desktop app for browsing MIB files and polling live values from SNMP-managed devices — switches, routers, and similar network equipment.
 
-A user mocked up designs in HTML/CSS/JS using an AI design tool, then exported this bundle so a coding agent can implement the designs for real.
+Point it at your MIB directories and it parses them into a browsable OID tree; pick a scalar or table, connect to a device (SNMPv1/v2c/v3), and fetch live values in a sortable, diffable table view.
 
-## What you should do — IMPORTANT
+## Features
 
-**Read the chat transcripts first.** There are 2 chat transcript(s) in `chats/`. The transcripts show the full back-and-forth between the user and the design assistant — they tell you **what the user actually wants** and **where they landed** after iterating. Don't skip them. The final HTML files are the output, but the chat is where the intent lives.
+- **MIB parsing** — recursively parses `.mib` files in one or more directories and builds the group/table hierarchy; flags files that fail to parse.
+- **Profiles** — group MIB directories into named profiles (e.g. per firmware version) and switch between them instantly.
+- **Tree and Tables views** — browse the full group hierarchy, or flatten straight to SNMP tables.
+- **Tabs and split panes** — open multiple tables/scalars in tabs, across up to two side-by-side panes, to compare devices or tables at once.
+- **SNMPv1/v2c/v3** — per-tab connection settings, including v3 security/auth/priv.
+- **Manual or auto-refresh** fetching, with a **diff mode** that highlights added/removed/changed rows between fetches.
+- **Readable column names** and **DISPLAY-HINT-aware formatting** for raw MIB identifiers and numeric values.
 
-**Read `project/SNMP MIB Client.dc.html` in full.** The user had this file open when they triggered the handoff, so it's almost certainly the primary design they want built. Read it top to bottom — don't skim. Then **follow its imports**: open every file it pulls in (shared components, CSS, scripts) so you understand how the pieces fit together before you start implementing.
+See [USAGE.md](USAGE.md) for a full walkthrough.
 
-**If anything is ambiguous, ask the user to confirm before you start implementing.** It's much cheaper to clarify scope up front than to build the wrong thing.
+## Tech stack
 
-## About the design files
+- **Frontend**: TypeScript + [Vite](https://vitejs.dev/), no framework.
+- **Backend**: [Tauri 2](https://tauri.app/) (Rust), using [`snmp2`](https://crates.io/crates/snmp2) for SNMP and [`tree-sitter`](https://tree-sitter.github.io/tree-sitter/) with a custom ASN.1 grammar to parse MIB files.
 
-The design medium is **HTML/CSS/JS** — these are prototypes, not production code. Your job is to **recreate them pixel-perfectly** in whatever technology makes sense for the target codebase (React, Vue, native, whatever fits). Match the visual output; don't copy the prototype's internal structure unless it happens to fit.
+## Development
 
-**Don't render these files in a browser or take screenshots unless the user asks you to.** Everything you need — dimensions, colors, layout rules — is spelled out in the source. Read the HTML and CSS directly; a screenshot won't tell you anything they don't.
+Prerequisites: [Node.js](https://nodejs.org/), [Rust](https://www.rust-lang.org/tools/install), and the [Tauri](https://tauri.app/start/prerequisites/) platform dependencies for your OS.
 
-## Bundle contents
+```sh
+npm install
+npm run tauri dev   # run the app in development mode
+```
 
-- `README.md` — this file
-- `chats/` — conversation transcripts (read these!)
-- `project/` — the `SNMP MIB Client UI Mockups` project files (HTML prototypes, assets, components)
+Other scripts:
+
+```sh
+npm run dev          # Vite dev server only (frontend)
+npm run build         # type-check and build the frontend
+npm run tauri build   # build a distributable app bundle
+```
+
+## Releases
+
+Pushing to `main` with a bumped version in `src-tauri/tauri.conf.json` triggers a GitHub Actions build for macOS, Linux, and Windows, and publishes a draft release.
+
+## License
+
+[MIT](LICENSE)
