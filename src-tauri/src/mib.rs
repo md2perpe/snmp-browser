@@ -72,6 +72,14 @@ pub struct FileErrors {
     pub errors: Vec<String>,
 }
 
+/// Every file found under one configured MIB directory (including
+/// subdirectories), so the UI can list them as subnodes of that directory.
+#[derive(Serialize, Clone, Debug, Default)]
+pub struct DirFiles {
+    pub dir: String,
+    pub files: Vec<String>,
+}
+
 #[derive(Serialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ParseResult {
@@ -83,6 +91,7 @@ pub struct ParseResult {
     pub tables: HashMap<String, TableInfo>,
     pub symbols: HashMap<String, SymbolInfo>,
     pub errors: Vec<FileErrors>,
+    pub dir_files: Vec<DirFiles>,
 }
 
 /// Builds a reverse `oid -> name` index from a parsed tree, for labeling numeric OIDs (e.g.
@@ -178,10 +187,12 @@ pub fn parse_directories(dirs: &[String]) -> ParseResult {
     let mut sequence_types: HashMap<String, Vec<String>> = HashMap::new();
     let mut display_hints: HashMap<String, String> = HashMap::new();
     let mut errors: Vec<FileErrors> = Vec::new();
+    let mut dir_files: Vec<DirFiles> = Vec::new();
 
     for dir in dirs {
         let mut files = Vec::new();
         collect_files(std::path::Path::new(dir), &mut files, &mut errors);
+        dir_files.push(DirFiles { dir: dir.clone(), files: files.iter().map(|p| p.display().to_string()).collect() });
         for path in files {
             let Ok(src) = std::fs::read_to_string(&path) else {
                 continue; // not a readable text file - skip silently
@@ -222,7 +233,7 @@ pub fn parse_directories(dirs: &[String]) -> ParseResult {
         })
         .collect();
 
-    ParseResult { tree, tables_tree, tables, symbols, errors }
+    ParseResult { tree, tables_tree, tables, symbols, errors, dir_files }
 }
 
 fn node_text<'a>(node: Node, src: &'a [u8]) -> &'a str {

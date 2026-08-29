@@ -142,13 +142,41 @@ function renderSidebar(store: Store): HTMLElement {
   const errors = store.state.parseErrors;
 
   const activeProfile = store.activeMibProfile();
-  const dirRows: HTMLElement[] = (activeProfile?.dirs ?? []).map((dir) =>
-    el("div", { class: "mib-dir-row" }, [
+  const dirRows: HTMLElement[] = (activeProfile?.dirs ?? []).flatMap((dir) => {
+    const files = store.dirFiles.find((d) => d.dir === dir)?.files ?? [];
+    const expandKey = `mibdir:${dir}`;
+    const expanded = files.length > 0 && !!store.state.expanded[expandKey];
+
+    const row = el("div", { class: "mib-dir-row" }, [
+      el(
+        "div",
+        {
+          class: "mib-dir-caret",
+          style: { visibility: files.length ? "visible" : "hidden", transform: `rotate(${expanded ? 90 : 0}deg)` },
+          onclick: files.length ? () => store.toggleExpand(expandKey) : undefined,
+        },
+        ["▶"],
+      ),
       el("div", { class: "mib-dir-icon" }),
       el("div", { class: "mib-dir-path", title: dir }, [dir]),
       el("button", { class: "mib-dir-remove", title: "Remove directory", onclick: () => store.removeMibDir(dir) }, ["×"]),
-    ]),
-  );
+    ]);
+
+    if (!expanded) return [row];
+
+    const fileRows = files.map((file) => {
+      const fileErrors = errors.find((fe) => fe.file === file)?.errors;
+      const hasIssue = !!fileErrors?.length;
+      const relativePath = file.startsWith(dir) ? file.slice(dir.length).replace(/^[/\\]/, "") : file;
+      const title = hasIssue ? `${file}\n\n${fileErrors!.join("\n")}` : file;
+      return el("div", { class: "mib-file-row", title }, [
+        el("div", { class: "mib-file-icon" + (hasIssue ? " mib-file-icon-issue" : "") }),
+        el("div", { class: "mib-file-name" + (hasIssue ? " mib-file-name-issue" : "") }, [relativePath]),
+      ]);
+    });
+
+    return [row, ...fileRows];
+  });
   if (errors.length) {
     const issueCount = errors.reduce((n, fe) => n + fe.errors.length, 0);
     dirRows.push(

@@ -15,11 +15,18 @@ export interface FileErrors {
   errors: string[];
 }
 
+/** Every file found under one configured MIB directory (including subdirectories). */
+export interface DirFiles {
+  dir: string;
+  files: string[];
+}
+
 export interface ParseResult {
   tree: MibNode[];
   /** Alternate view: every table as a root, its columns as children. */
   tablesTree: MibNode[];
   errors: FileErrors[];
+  dirFiles: DirFiles[];
 }
 
 export interface MibProfile {
