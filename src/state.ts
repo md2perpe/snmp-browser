@@ -3,6 +3,7 @@ import { DEFAULT_COL_WIDTH, mockHostProfiles } from "./mockData";
 import type {
   AnyTabState,
   AppState,
+  DirFiles,
   HostProfile,
   MibNode,
   MibProfile,
@@ -47,6 +48,8 @@ export class Store {
   hostProfiles: HostProfile[] = mockHostProfiles;
   tree: MibNode[] = [];
   tablesTree: MibNode[] = [];
+  /** Files found under each configured MIB directory, for showing them as subnodes in the sidebar. */
+  dirFiles: DirFiles[] = [];
   /** This machine's non-loopback IPv4 addresses, for the trap listener's "point your device here" hint. Empty until a trap tab has been opened at least once. */
   localIps: string[] = [];
 
@@ -421,6 +424,7 @@ export class Store {
     const result = await invoke<ParseResult>("get_mib_tree");
     this.tree = result.tree;
     this.tablesTree = result.tablesTree;
+    this.dirFiles = result.dirFiles;
     this.state.parseErrors = result.errors;
     if (result.errors.length === 0) this.state.parseErrorsOpen = false;
     this.notify();

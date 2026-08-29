@@ -243,6 +243,14 @@ button {
   font-size: 11px;
   color: var(--text-muted);
 }
+.mib-dir-caret {
+  width: 10px;
+  flex: none;
+  text-align: center;
+  color: #6b6c70;
+  font-size: 8px;
+  cursor: pointer;
+}
 .mib-dir-icon {
   width: 9px;
   height: 7px;
@@ -273,6 +281,33 @@ button {
 }
 .mib-dir-remove:hover {
   color: var(--red);
+}
+.mib-file-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10.5px;
+  color: var(--text-dim);
+  padding-left: 16px;
+}
+.mib-file-icon {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--icon-scalar);
+}
+.mib-file-icon-issue {
+  background: var(--yellow);
+}
+.mib-file-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, Menlo, monospace;
+}
+.mib-file-name-issue {
+  color: var(--yellow);
 }
 .mib-dir-warning {
   display: block;
