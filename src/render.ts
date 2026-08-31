@@ -703,7 +703,7 @@ function renderTableToolbar(store: Store, pane: PaneState, tab: TabState): HTMLE
       "label",
       {
         class: "toggle-label",
-        title: 'Show values with a DISPLAY-HINT formatted (e.g. 123 -> 12.3) instead of raw',
+        title: 'Show values with a DISPLAY-HINT formatted (e.g. 123 -> 12.3) or an enumerated value named (e.g. 2 -> "ok") instead of raw',
         onclick: () => store.toggleUseDisplayHints(pane.id),
       },
       [
@@ -718,8 +718,8 @@ function renderTableToolbar(store: Store, pane: PaneState, tab: TabState): HTMLE
 /** A couple of literal values read like a status enum regardless of which MIB table they came from. */
 function statusColor(value: string): string | null {
   const v = value.toLowerCase();
-  if (v === "up" || v.startsWith("up(")) return "var(--green)";
-  if (v === "down" || v.startsWith("down(")) return "var(--red)";
+  if (v === "up") return "var(--green)";
+  if (v === "down") return "var(--red)";
   return null;
 }
 
@@ -789,10 +789,14 @@ function applyDisplayHint(raw: string, hint: string): string | null {
   return `${sign}${intPart}.${fracPart}`;
 }
 
-function renderCell(colKey: string, row: Row, changed: boolean, displayHint?: string): HTMLTableCellElement {
+function renderCell(colKey: string, row: Row, changed: boolean, displayHint?: string, enumLabels?: Record<string, string>): HTMLTableCellElement {
   const bg = changed ? "var(--yellow-bg)" : "transparent";
   const raw = row[colKey] ?? "";
-  const hinted = displayHint ? applyDisplayHint(raw, displayHint) : null;
+  // An enumerated column's named value takes precedence over a numeric DISPLAY-HINT -
+  // in practice a column only ever has one or the other, never both.
+  const hinted =
+    (enumLabels && Object.prototype.hasOwnProperty.call(enumLabels, raw) ? enumLabels[raw] : null) ??
+    (displayHint ? applyDisplayHint(raw, displayHint) : null);
   const value = hinted ?? raw;
   const title = hinted !== null && hinted !== raw ? `raw: ${raw}` : undefined;
   const color = statusColor(value);
@@ -811,6 +815,7 @@ function renderTable(store: Store, pane: PaneState, tab: TabState): HTMLElement 
 
   const columnLabels = tab.humanReadableColumns ? humanizeColumnNames(tab.columns) : null;
   const displayHints = tab.useDisplayHints ? tab.displayHints : null;
+  const enumLabels = tab.useDisplayHints ? tab.enumLabels : null;
 
   const headRow = el(
     "tr",
@@ -819,7 +824,7 @@ function renderTable(store: Store, pane: PaneState, tab: TabState): HTMLElement 
       const startWidth = store.colWidth(tab, col);
       const sorted = tab.sortCol === col;
       const hint = tab.displayHints[col];
-      const title = hint ? `${col} (has DISPLAY-HINT "${hint}")` : col;
+      const title = hint ? `${col} (has DISPLAY-HINT "${hint}")` : tab.enumLabels[col] ? `${col} (has named values)` : col;
       return el("th", { style: { width: startWidth + "px" }, title }, [
         el("div", { class: "th-btn" + (sorted ? " sorted" : ""), onclick: () => store.setSortCol(pane.id, col) }, [
           columnLabels ? columnLabels[col] : col,
@@ -843,7 +848,7 @@ function renderTable(store: Store, pane: PaneState, tab: TabState): HTMLElement 
     return el(
       "tr",
       { style: { background: rowBg, opacity, textDecoration } },
-      tab.columns.map((col) => renderCell(col, row, changedFields.includes(col), displayHints?.[col])),
+      tab.columns.map((col) => renderCell(col, row, changedFields.includes(col), displayHints?.[col], enumLabels?.[col])),
     );
   });
 

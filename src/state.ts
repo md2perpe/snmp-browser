@@ -204,6 +204,7 @@ export class Store {
       selectedNode: "",
       columns: [],
       displayHints: {},
+      enumLabels: {},
       sortCol: ROW_KEY_FIELD,
       sortDir: 1,
       colWidths: {},
@@ -850,7 +851,12 @@ export class Store {
       return;
     }
     try {
-      const result = await invoke<{ columns: string[]; rows: Row[]; displayHints: Record<string, string> }>("fetch", {
+      const result = await invoke<{
+        columns: string[];
+        rows: Row[];
+        displayHints: Record<string, string>;
+        enumLabels: Record<string, Record<string, string>>;
+      }>("fetch", {
         nodeId: tab.selectedNode,
         connection: this.connectionOf(tab),
       });
@@ -866,6 +872,7 @@ export class Store {
       }
       tab.columns = result.columns;
       tab.displayHints = result.displayHints;
+      tab.enumLabels = result.enumLabels;
       if (!tab.columns.includes(tab.sortCol)) tab.sortCol = tab.columns[0] ?? ROW_KEY_FIELD;
       tab.fetchError = null;
     } catch (e) {

@@ -92,6 +92,8 @@ export interface TabState {
   columns: string[];
   /** DISPLAY-HINT per column that has one (e.g. "d-1"), from the last successful fetch. */
   displayHints: Record<string, string>;
+  /** Named values per column with an enumerated SYNTAX (e.g. "2" -> "ok"), from the last successful fetch. */
+  enumLabels: Record<string, Record<string, string>>;
   sortCol: string;
   sortDir: 1 | -1;
   colWidths: ColWidths;

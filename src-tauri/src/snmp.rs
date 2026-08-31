@@ -31,6 +31,10 @@ pub struct FetchResult {
     /// DISPLAY-HINT per column that has one (e.g. `"d-1"`), for columns whose raw
     /// value the frontend can optionally reformat instead of showing as-is.
     pub display_hints: HashMap<String, String>,
+    /// Named values per column that has an enumerated SYNTAX (e.g. `"2" -> "ok"`),
+    /// keyed by the row's raw value - rows always carry the raw value, and the
+    /// frontend swaps in the label only while "Display hint" is on.
+    pub enum_labels: HashMap<String, HashMap<String, String>>,
 }
 
 fn open_session(p: &ConnectionParams) -> Result<SyncSession, String> {
@@ -118,7 +122,7 @@ pub fn fetch_scalar(params: &ConnectionParams, oid_str: &str) -> Result<FetchRes
     if let Some((_, v)) = pdu.varbinds.clone().next() {
         row.insert("Value".to_string(), format_value(&v, &[]));
     }
-    Ok(FetchResult { columns: vec!["Value".to_string()], rows: vec![row], display_hints: HashMap::new() })
+    Ok(FetchResult { columns: vec!["Value".to_string()], rows: vec![row], display_hints: HashMap::new(), enum_labels: HashMap::new() })
 }
 
 pub fn fetch_table(params: &ConnectionParams, table: &TableInfo) -> Result<FetchResult, String> {
@@ -162,7 +166,9 @@ pub fn fetch_table(params: &ConnectionParams, table: &TableInfo) -> Result<Fetch
             let col_arc = suffix[1] as u32;
             let row_key = suffix[2..].iter().map(u64::to_string).collect::<Vec<_>>().join(".");
             let Some(col) = by_arc.get(&col_arc) else { continue };
-            let formatted = format_value(v, &col.enum_values);
+            // Rows always carry the raw value; the frontend applies a column's DISPLAY-HINT
+            // or enum labels on top of it only while "Display hint" is toggled on.
+            let formatted = format_value(v, &[]);
             if !rows.contains_key(&row_key) {
                 row_order.push(row_key.clone());
             }
@@ -191,7 +197,14 @@ pub fn fetch_table(params: &ConnectionParams, table: &TableInfo) -> Result<Fetch
     let display_hints =
         table.columns.iter().filter_map(|c| c.display_hint.as_ref().map(|h| (c.name.clone(), h.clone()))).collect();
 
-    Ok(FetchResult { columns, rows: out_rows, display_hints })
+    let enum_labels = table
+        .columns
+        .iter()
+        .filter(|c| !c.enum_values.is_empty())
+        .map(|c| (c.name.clone(), c.enum_values.iter().map(|(v, name)| (v.to_string(), name.clone())).collect()))
+        .collect();
+
+    Ok(FetchResult { columns, rows: out_rows, display_hints, enum_labels })
 }
 
 /// Result of one timed subtree walk, for the walk benchmark.
