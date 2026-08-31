@@ -54,10 +54,11 @@ appears — click it to see which files and what went wrong.
   a root with its columns underneath — useful when you know you want a
   specific table and don't want to hunt through the group hierarchy.
 
-Single-clicking a row just highlights it. **Double-click a table or scalar
-to open it in a new tab** — that's the only thing that actually loads
-something into a tab. Right-clicking a table also offers "Open in new tab"
-from a context menu.
+Single-clicking a row just highlights it. **Double-click a table to open
+it in a new tab.** Scalars don't open on double-click — right-click one
+instead and choose "Open in new tab" from the context menu. Right-clicking
+a table offers the same item. Any resolvable node, groups included, also
+offers "Benchmark" from that menu — see [below](#6-benchmark-a-walk).
 
 ### 3. Set the connection details
 
@@ -101,13 +102,15 @@ Click the small chevron next to Fetch to choose the fetch mode:
 
 ### 6. Benchmark a walk
 
-**Benchmark** times repeated SNMP walks of the selected node's subtree, to
-see how fast — and how consistently — a device serves it.
+**Benchmark** times repeated SNMP walks of a node's subtree, to see how fast
+— and how consistently — a device serves it. It's its own kind of tab,
+separate from a query tab, with its own connection fields.
 
-Pick a node in the tree, open it in a tab, fill in the connection fields,
-then click **Benchmark**. Choose how many walks to run (10 by default, up to
-1000) and click **Run**; results fill in as each walk finishes, and **Stop**
-ends the run early (the walk already in flight finishes first).
+Right-click a node in the tree and choose **Benchmark** to open one, aimed
+at that node. Fill in the connection fields, choose how many walks to run
+(10 by default, up to 1000), and click **Run**; results fill in as each walk
+finishes, and **Stop** ends the run early (the walk already in flight
+finishes first).
 
 You get **min**, **median**, **mean**, **P95**, **max** and **standard
 deviation** over the run, the varbind and request counts per walk, and a bar
@@ -129,8 +132,9 @@ Worth knowing:
 
 ## Working with tabs and panes
 
-- Double-clicking a node in the sidebar opens it in a new tab in the active
-  pane.
+- Double-clicking a table in the sidebar opens it in a new tab in the active
+  pane; right-click any resolvable node for "Open in new tab" (scalars and
+  tables) or "Benchmark" (any resolvable node, groups included).
 - **×** on a tab closes it.
 - **⊟** splits the pane in two, side by side (up to two panes) — handy for
   comparing two tables, or the same table on two devices, at once.

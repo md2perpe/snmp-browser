@@ -100,9 +100,9 @@ function renderTreeRow(store: Store, node: MibNode, depth: number, selectedNodeI
       "data-node-id": node.id,
       style: { paddingLeft: depth * 16 + 2 + "px", opacity: node.resolved ? "1" : "0.45" },
       onclick: () => store.selectTreeNode(node),
-      ondblclick: () => store.openNodeInNewTab(node.id),
+      ondblclick: node.type === "table" ? () => store.openNodeInNewTab(node.id) : undefined,
       oncontextmenu:
-        node.type === "table" || store.canBenchmark(node)
+        node.type !== "group" || store.canBenchmark(node)
           ? (e: MouseEvent) => {
               e.preventDefault();
               store.openTreeContextMenu(e.clientX, e.clientY, node.id);
@@ -391,7 +391,7 @@ function renderTreeContextMenu(store: Store): HTMLElement | null {
   const node = store.findNode(store.activeTree(), menu.nodeId);
 
   const items: HTMLElement[] = [];
-  if (node?.type === "table") {
+  if (node && node.type !== "group") {
     items.push(
       el("button", { class: "context-menu-item", onclick: () => store.openNodeInNewTab(menu.nodeId) }, [
         `Open "${node.label}" in new tab`,
