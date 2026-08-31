@@ -4,7 +4,7 @@ use crate::mib::{ColumnInfo, TableInfo};
 use serde::{Deserialize, Serialize};
 use snmp2::{v3, Oid, SyncSession, Value};
 use std::collections::HashMap;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const TIMEOUT: Duration = Duration::from_secs(4);
 const MAX_REPETITIONS: u32 = 25;
@@ -189,4 +189,74 @@ pub fn fetch_table(params: &ConnectionParams, table: &TableInfo) -> Result<Fetch
         table.columns.iter().filter_map(|c| c.display_hint.as_ref().map(|h| (c.name.clone(), h.clone()))).collect();
 
     Ok(FetchResult { columns, rows: out_rows, display_hints })
+}
+
+/// Result of one timed subtree walk, for the walk benchmark.
+#[derive(Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct WalkTiming {
+    /// Wall-clock time of the walk loop itself, in milliseconds. Session setup
+    /// (including SNMPv3 engine discovery) happens before the clock starts, so
+    /// repeated runs measure the same work.
+    pub duration_ms: f64,
+    /// Varbinds returned from inside the subtree; the one that walks past its
+    /// end isn't counted.
+    pub varbinds: usize,
+    /// GETNEXT (v1) or GETBULK (v2c/v3) requests the walk needed.
+    pub requests: usize,
+    /// True when `MAX_ITERATIONS` cut the walk short, so the timing covers only
+    /// part of the subtree.
+    pub truncated: bool,
+}
+
+/// Walks everything under `oid_str` and times it, without collecting any
+/// values - the benchmark only cares about how long the agent takes to serve
+/// the subtree, not what's in it.
+pub fn walk_timed(params: &ConnectionParams, oid_str: &str) -> Result<WalkTiming, String> {
+    let base = oid_from_dotted(oid_str)?;
+    let mut sess = open_session(params)?;
+    let use_bulk = matches!(params.version.as_str(), "v2c" | "v3");
+
+    let mut current = base.clone();
+    let mut varbinds = 0usize;
+    let mut requests = 0usize;
+    let mut truncated = true;
+    let started = Instant::now();
+
+    for _ in 0..MAX_ITERATIONS {
+        let received: Vec<(Oid<'_>, Value<'_>)> = if use_bulk {
+            sess.getbulk(&[&current], 0, MAX_REPETITIONS).map_err(|e| e.to_string())?.varbinds.collect()
+        } else {
+            sess.getnext(&current).map_err(|e| e.to_string())?.varbinds.collect()
+        };
+        requests += 1;
+        if received.is_empty() {
+            truncated = false;
+            break;
+        }
+
+        let mut next_start: Option<Oid<'static>> = None;
+        let mut finished = false;
+        for (o, v) in &received {
+            if matches!(v, Value::EndOfMibView) || !o.starts_with(&base) {
+                finished = true;
+                break;
+            }
+            varbinds += 1;
+            next_start = Some(o.to_owned());
+        }
+        if finished {
+            truncated = false;
+            break;
+        }
+        match next_start {
+            Some(o) => current = o,
+            None => {
+                truncated = false;
+                break;
+            }
+        }
+    }
+
+    Ok(WalkTiming { duration_ms: started.elapsed().as_secs_f64() * 1000.0, varbinds, requests, truncated })
 }

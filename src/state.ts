@@ -3,6 +3,8 @@ import { DEFAULT_COL_WIDTH, mockHostProfiles } from "./mockData";
 import type {
   AnyTabState,
   AppState,
+  BenchmarkTabState,
+  ConnectionParams,
   DirFiles,
   HostProfile,
   MibNode,
@@ -18,6 +20,7 @@ import type {
   TrapEvent,
   TrapListenerStatus,
   TrapTabState,
+  WalkTiming,
 } from "./types";
 
 type Patch<T> = Partial<T> | ((t: T) => Partial<T>);
@@ -32,6 +35,8 @@ const TRAP_POLL_INTERVAL_MS = 1000;
 /** Client-side mirror of the server's per-listener ring buffer cap (see `trap.rs::MAX_EVENTS`), so a long-idle tab's array doesn't grow unbounded. */
 const MAX_CLIENT_TRAP_EVENTS = 2000;
 const THEME_STORAGE_KEY = "snmpBrowserTheme";
+const DEFAULT_BENCHMARK_ITERATIONS = 10;
+const MAX_BENCHMARK_ITERATIONS = 1000;
 
 function loadTheme(): Theme {
   try {
@@ -43,6 +48,57 @@ function loadTheme(): Theme {
   return "dark";
 }
 
+/** `invoke()` rejects with a plain string under Tauri but with an Error over the HTTP fallback - unwrap both to the bare message. */
+function errorMessage(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
+
+export interface BenchmarkStats {
+  count: number;
+  min: number;
+  max: number;
+  mean: number;
+  median: number;
+  p95: number;
+  /** Sample standard deviation (n-1); 0 for a single run, where it's undefined. */
+  stdDev: number;
+  /** Time spent walking, summed over every run - excludes the gaps between them. */
+  total: number;
+}
+
+/**
+ * Linear-interpolated percentile of an ascending-sorted array, the usual
+ * definition - `q = 0.5` gives the median, averaging the two middle values
+ * for an even-length sample.
+ */
+function percentile(sorted: number[], q: number): number {
+  if (sorted.length === 1) return sorted[0];
+  const pos = (sorted.length - 1) * q;
+  const lo = Math.floor(pos);
+  const hi = Math.ceil(pos);
+  return sorted[lo] + (sorted[hi] - sorted[lo]) * (pos - lo);
+}
+
+/** Descriptive statistics over a benchmark's walk durations (ms); null until at least one walk has finished. */
+export function computeStats(durations: number[]): BenchmarkStats | null {
+  if (durations.length === 0) return null;
+  const sorted = [...durations].sort((a, b) => a - b);
+  const n = sorted.length;
+  const total = sorted.reduce((sum, v) => sum + v, 0);
+  const mean = total / n;
+  const variance = n > 1 ? sorted.reduce((sum, v) => sum + (v - mean) ** 2, 0) / (n - 1) : 0;
+  return {
+    count: n,
+    min: sorted[0],
+    max: sorted[n - 1],
+    mean,
+    median: percentile(sorted, 0.5),
+    p95: percentile(sorted, 0.95),
+    stdDev: Math.sqrt(variance),
+    total,
+  };
+}
+
 export class Store {
   state: AppState;
   hostProfiles: HostProfile[] = mockHostProfiles;
@@ -52,6 +108,9 @@ export class Store {
   dirFiles: DirFiles[] = [];
   /** This machine's non-loopback IPv4 addresses, for the trap listener's "point your device here" hint. Empty until a trap tab has been opened at least once. */
   localIps: string[] = [];
+
+  /** Iteration count the next benchmark tab opens with - the last one the user picked. */
+  private benchmarkIterations = DEFAULT_BENCHMARK_ITERATIONS;
 
   private listeners: Array<() => void> = [];
   private tickListeners: Array<() => void> = [];
@@ -183,6 +242,31 @@ export class Store {
     };
   }
 
+  /** A benchmark tab starts aimed at `node` with its own blank/default connection fields - independent of whatever query tab it was opened from, since it's its own pane tab. */
+  makeBenchmarkTab(id: string, node: MibNode, opts: Partial<BenchmarkTabState> = {}): BenchmarkTabState {
+    const h = this.hostProfiles[0];
+    return {
+      kind: "benchmark",
+      id,
+      nodeLabel: node.label,
+      oid: node.oid,
+      hostAddr: h?.addr ?? "",
+      hostPort: h?.port ?? DEFAULT_SNMP_PORT,
+      version: "v2c",
+      community: h?.community ?? DEFAULT_SNMP_COMMUNITY,
+      v3User: h?.v3User ?? "",
+      v3Auth: "",
+      v3Priv: "",
+      iterations: this.benchmarkIterations,
+      running: false,
+      cancelling: false,
+      runs: [],
+      failures: 0,
+      error: null,
+      ...opts,
+    };
+  }
+
   // ---------- lookups ----------
 
   getPane(id: string): PaneState | undefined {
@@ -217,6 +301,15 @@ export class Store {
     if (!pane) return;
     const tab = this.getPaneActiveTab(pane);
     if (!tab || tab.kind !== "trap") return;
+    this.applyPatch(tab, patch);
+    this.notify();
+  }
+
+  updateActiveBenchmarkTabInPane(paneId: string, patch: Patch<BenchmarkTabState>) {
+    const pane = this.getPane(paneId);
+    if (!pane) return;
+    const tab = this.getPaneActiveTab(pane);
+    if (!tab || tab.kind !== "benchmark") return;
     this.applyPatch(tab, patch);
     this.notify();
   }
@@ -284,6 +377,20 @@ export class Store {
     }
   }
 
+  /** Opens a new benchmark tab in the active pane, aimed at the given tree node. */
+  openBenchmarkTab(nodeId: string) {
+    const node = this.findNode(this.activeTree(), nodeId);
+    if (!this.canBenchmark(node)) return;
+    this.state.selectedTreeNodeId = nodeId;
+    const pane = this.getPane(this.state.activePaneId);
+    if (!pane) return;
+    const tab = this.makeBenchmarkTab("tab" + Date.now(), node!);
+    pane.tabs.push(tab);
+    pane.activeTabId = tab.id;
+    this.notify();
+    this.closeTreeContextMenu();
+  }
+
   closeTabInPane(paneId: string, tabId: string) {
     const pane = this.getPane(paneId);
     if (!pane) return;
@@ -293,6 +400,8 @@ export class Store {
       this.stopTrapPolling(tabId);
       if (tab.running) void invoke("stop_trap_listener", { id: tabId });
     }
+    // The walk in flight can't be aborted, but this stops the run from starting another.
+    if (tab?.kind === "benchmark" && tab.running) tab.cancelling = true;
     pane.tabs = pane.tabs.filter((t) => t.id !== tabId);
     if (pane.activeTabId === tabId) {
       pane.activeTabId = pane.tabs.length ? pane.tabs[pane.tabs.length - 1].id : null;
@@ -309,6 +418,8 @@ export class Store {
     // A duplicated trap tab doesn't inherit a live backend listener (there isn't one
     // registered under its new id yet), so it starts out as a fresh, stopped copy.
     if (newTab?.kind === "trap") newTab = { ...newTab, running: false, boundAddr: "", startError: null, events: [], lastSeq: 0, expandedSeq: null };
+    // Likewise, a duplicated benchmark tab doesn't inherit the run loop backing it.
+    if (newTab?.kind === "benchmark") newTab = { ...newTab, running: false, cancelling: false };
     pane.width = 620;
     const newPane: PaneState = { id: "pane" + Date.now(), width: null, tabs: newTab ? [newTab] : [], activeTabId: newTab?.id ?? null };
     this.state.panes.push(newPane);
@@ -326,6 +437,7 @@ export class Store {
         this.stopTrapPolling(t.id);
         if (t.running) void invoke("stop_trap_listener", { id: t.id });
       }
+      if (t.kind === "benchmark" && t.running) t.cancelling = true;
     });
     this.state.panes = this.state.panes.filter((p) => p.id !== paneId);
     if (this.state.panes.length === 1) this.state.panes[0].width = null;
@@ -585,6 +697,10 @@ export class Store {
     this.updateActiveTrapTabInPane(paneId, { version });
   }
 
+  setBenchmarkVersion(paneId: string, version: SnmpVersion) {
+    this.updateActiveBenchmarkTabInPane(paneId, { version });
+  }
+
   // ---------- table ----------
 
   setSortCol(paneId: string, col: string) {
@@ -624,8 +740,21 @@ export class Store {
     return !!node && node.type !== "group" && node.resolved;
   }
 
-  /** Whether a tab's connection fields are filled in enough to attempt a fetch. */
-  hasCompleteConnection(tab: TabState): boolean {
+  /** A tab's connection fields in the shape the backend commands expect - shared by query and benchmark tabs, which carry the same fields independently. */
+  connectionOf(tab: ConnectionParams): ConnectionParams {
+    return {
+      hostAddr: tab.hostAddr,
+      hostPort: tab.hostPort,
+      version: tab.version,
+      community: tab.community,
+      v3User: tab.v3User,
+      v3Auth: tab.v3Auth,
+      v3Priv: tab.v3Priv,
+    };
+  }
+
+  /** Whether a tab's connection fields are filled in enough to attempt a fetch or a walk. */
+  hasCompleteConnection(tab: ConnectionParams): boolean {
     if (!tab.hostAddr.trim() || !tab.hostPort.trim() || !tab.version) return false;
     return tab.version === "v3" ? !!tab.v3User.trim() : !!tab.community.trim();
   }
@@ -723,15 +852,7 @@ export class Store {
     try {
       const result = await invoke<{ columns: string[]; rows: Row[]; displayHints: Record<string, string> }>("fetch", {
         nodeId: tab.selectedNode,
-        connection: {
-          hostAddr: tab.hostAddr,
-          hostPort: tab.hostPort,
-          version: tab.version,
-          community: tab.community,
-          v3User: tab.v3User,
-          v3Auth: tab.v3Auth,
-          v3Priv: tab.v3Priv,
-        },
+        connection: this.connectionOf(tab),
       });
       if (tab.diffMode) {
         const { meta, removed } = this.computeRowDiff(tab.workingRows, result.rows);
@@ -776,6 +897,79 @@ export class Store {
       meta[this.rowKey(r)] = { status: "removed" };
     });
     return { meta, removed };
+  }
+
+  // ---------- walk benchmark ----------
+
+  /** Any resolved node can be walked, group nodes included - unlike Fetch, which needs a table or a scalar. */
+  canBenchmark(node: MibNode | null): boolean {
+    return !!node && node.resolved && !!node.oid;
+  }
+
+  setBenchmarkIterations(paneId: string, count: number) {
+    const pane = this.getPane(paneId);
+    const tab = pane && this.getPaneActiveTab(pane);
+    if (!tab || tab.kind !== "benchmark" || tab.running) return;
+    tab.iterations = Math.min(MAX_BENCHMARK_ITERATIONS, Math.max(1, Math.floor(count) || 1));
+    this.benchmarkIterations = tab.iterations;
+    this.notify();
+  }
+
+  /** Asks a run to stop; the walk already in flight can't be aborted, so it finishes first. */
+  cancelBenchmark(paneId: string) {
+    const pane = this.getPane(paneId);
+    const tab = pane && this.getPaneActiveTab(pane);
+    if (!tab || tab.kind !== "benchmark" || !tab.running) return;
+    tab.cancelling = true;
+    this.notify();
+  }
+
+  /** Finds a benchmark tab by id across every pane - the run loop only knows the tab id, not which pane it's in (and it may have been closed). */
+  private findBenchmarkTab(tabId: string): BenchmarkTabState | undefined {
+    for (const pane of this.state.panes) {
+      const t = pane.tabs.find((t) => t.id === tabId);
+      if (t && t.kind === "benchmark") return t;
+    }
+    return undefined;
+  }
+
+  /**
+   * Walks the benchmark tab's OID `iterations` times, one walk at a time so the
+   * runs don't contend with each other, re-rendering after each so results fill
+   * in as they arrive. A walk that fails (SNMP is over UDP, so a dropped packet
+   * shows up as a timeout) is counted as a failure and the run carries on - one
+   * unlucky packet shouldn't throw away a long benchmark. A failure on the very
+   * first walk is different: nothing is reachable, so there's nothing to
+   * measure and the run stops there.
+   */
+  async runBenchmark(paneId: string) {
+    const pane = this.getPane(paneId);
+    const tab = pane && this.getPaneActiveTab(pane);
+    if (!tab || tab.kind !== "benchmark" || tab.running) return;
+    const tabId = tab.id;
+    tab.runs = [];
+    tab.failures = 0;
+    tab.error = null;
+    tab.cancelling = false;
+    tab.running = true;
+    this.notify();
+
+    for (let i = 0; i < tab.iterations; i++) {
+      if (tab.cancelling || !this.findBenchmarkTab(tabId)) break;
+      try {
+        const timing = await invoke<WalkTiming>("walk_timed", { oid: tab.oid, connection: this.connectionOf(tab) });
+        tab.runs.push(timing);
+      } catch (e) {
+        tab.failures++;
+        tab.error = errorMessage(e);
+        if (i === 0) break;
+      }
+      this.notify();
+    }
+
+    tab.running = false;
+    tab.cancelling = false;
+    this.notify();
   }
 
   // ---------- trap listener ----------

@@ -13,6 +13,7 @@ Point it at your MIB directories and it parses them into a browsable OID tree; p
 - **SNMPv1/v2c/v3** — per-tab connection settings, including v3 security/auth/priv.
 - **Manual or auto-refresh** fetching, with a **diff mode** that highlights added/removed/changed rows between fetches.
 - **Readable column names** and **DISPLAY-HINT-aware formatting** for raw MIB identifiers and numeric values.
+- **Walk benchmark** — time repeated SNMP walks of any subtree and see min/median/mean/P95/max/std dev across the runs.
 
 See [USAGE.md](USAGE.md) for a full walkthrough.
 

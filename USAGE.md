@@ -99,6 +99,34 @@ Click the small chevron next to Fetch to choose the fetch mode:
   `d`/`d-N` form is supported), are unaffected either way.
 - Status-like values (`up`/`down`/etc.) get a colored dot for a quick read.
 
+### 6. Benchmark a walk
+
+**Benchmark** times repeated SNMP walks of the selected node's subtree, to
+see how fast — and how consistently — a device serves it.
+
+Pick a node in the tree, open it in a tab, fill in the connection fields,
+then click **Benchmark**. Choose how many walks to run (10 by default, up to
+1000) and click **Run**; results fill in as each walk finishes, and **Stop**
+ends the run early (the walk already in flight finishes first).
+
+You get **min**, **median**, **mean**, **P95**, **max** and **standard
+deviation** over the run, the varbind and request counts per walk, and a bar
+per walk with the fastest one in green and the slowest in yellow.
+
+Worth knowing:
+- Unlike Fetch, this works on **group nodes** too — any node with a
+  resolvable OID can be walked, so you can time a whole subtree, not just a
+  single table or scalar.
+- Timing covers the walk itself. Opening the session (including SNMPv3
+  engine discovery) happens before the clock starts, so every run measures
+  the same work.
+- Each walk uses a fresh session, one at a time, so runs don't contend with
+  each other. Expect the first run to be the slowest.
+- SNMP rides on UDP, so a dropped packet shows up as a failed walk. Failures
+  are counted and reported but don't abort the run or skew the statistics —
+  unless the very first walk fails, which means nothing is reachable and
+  there's nothing to measure.
+
 ## Working with tabs and panes
 
 - Double-clicking a node in the sidebar opens it in a new tab in the active

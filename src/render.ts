@@ -1,6 +1,6 @@
 import { el, startDrag, svgIcon } from "./dom";
-import type { Store } from "./state";
-import type { MibNode, PaneState, Row, SnmpVersion, TabState, Theme, TrapEvent, TrapTabState, TrapVarbind } from "./types";
+import { computeStats, type Store } from "./state";
+import type { BenchmarkTabState, MibNode, PaneState, Row, SnmpVersion, TabState, Theme, TrapEvent, TrapTabState, TrapVarbind } from "./types";
 
 const THEME_OPTIONS: { id: Theme; label: string }[] = [
   { id: "dark", label: "Dark" },
@@ -102,7 +102,7 @@ function renderTreeRow(store: Store, node: MibNode, depth: number, selectedNodeI
       onclick: () => store.selectTreeNode(node),
       ondblclick: () => store.openNodeInNewTab(node.id),
       oncontextmenu:
-        node.type === "table"
+        node.type === "table" || store.canBenchmark(node)
           ? (e: MouseEvent) => {
               e.preventDefault();
               store.openTreeContextMenu(e.clientX, e.clientY, node.id);
@@ -390,22 +390,27 @@ function renderTreeContextMenu(store: Store): HTMLElement | null {
   if (!menu) return null;
   const node = store.findNode(store.activeTree(), menu.nodeId);
 
+  const items: HTMLElement[] = [];
+  if (node?.type === "table") {
+    items.push(
+      el("button", { class: "context-menu-item", onclick: () => store.openNodeInNewTab(menu.nodeId) }, [
+        `Open "${node.label}" in new tab`,
+      ]),
+    );
+  }
+  if (store.canBenchmark(node)) {
+    items.push(
+      el("button", { class: "context-menu-item", onclick: () => store.openBenchmarkTab(menu.nodeId) }, [
+        `Benchmark "${node?.label ?? menu.nodeId}" walk`,
+      ]),
+    );
+  }
+  if (items.length === 0) return null;
+
   return el(
     "div",
     { class: "context-menu-overlay", onclick: () => store.closeTreeContextMenu(), oncontextmenu: (e: Event) => e.preventDefault() },
-    [
-      el(
-        "div",
-        { class: "context-menu", style: { left: menu.x + "px", top: menu.y + "px" }, onclick: (e: Event) => e.stopPropagation() },
-        [
-          el(
-            "button",
-            { class: "context-menu-item", onclick: () => store.openNodeInNewTab(menu.nodeId) },
-            [`Open "${node?.label ?? menu.nodeId}" in new tab`],
-          ),
-        ],
-      ),
-    ],
+    [el("div", { class: "context-menu", style: { left: menu.x + "px", top: menu.y + "px" }, onclick: (e: Event) => e.stopPropagation() }, items)],
   );
 }
 
@@ -480,6 +485,9 @@ function renderTabBar(store: Store, pane: PaneState): HTMLElement {
     if (tab.kind === "trap") {
       label = "Trap Listener · " + (tab.running ? tab.boundAddr : "stopped");
       dotClass += tab.startError ? " error" : tab.running ? "" : " off";
+    } else if (tab.kind === "benchmark") {
+      label = "Benchmark · " + tab.nodeLabel;
+      dotClass += tab.error ? " error" : tab.running ? "" : " off";
     } else {
       const host = store.hostProfiles.find((h) => h.id === tab.hostId);
       label = (host ? host.label : tab.hostAddr || "(no address)") + " · " + tab.selectedNode;
@@ -873,6 +881,8 @@ function renderPane(store: Store, pane: PaneState, isLast: boolean): HTMLElement
     body = [renderEmptyPane()];
   } else if (tab.kind === "trap") {
     body = [renderTrapToolbar(store, pane, tab), renderTrapTable(store, pane, tab)];
+  } else if (tab.kind === "benchmark") {
+    body = renderBenchmarkPane(store, pane, tab);
   } else {
     body = [renderToolbar(store, pane, tab), renderTableToolbar(store, pane, tab), renderTable(store, pane, tab), renderStatusBar(tab)];
   }
@@ -1126,6 +1136,257 @@ function renderTrapTable(store: Store, pane: PaneState, tab: TrapTabState): HTML
   return el("div", { class: "table-scroll" }, [
     el("table", { class: "data-table trap-table" }, [el("thead", {}, [headRow]), el("tbody", {}, rows)]),
   ]);
+}
+
+// ---------- Walk benchmark ----------
+
+/** Enough decimals to tell two runs apart without printing noise: finer for short walks, coarser for long ones. */
+function formatMs(ms: number): string {
+  if (ms >= 1000) return ms.toFixed(0);
+  if (ms >= 100) return ms.toFixed(1);
+  return ms.toFixed(2);
+}
+
+/** "240 varbinds", or "238-240 varbinds" when a per-walk count wasn't identical across runs (an agent whose table changed mid-benchmark). */
+function formatPerWalkCount(values: number[], noun: string): string {
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const plural = max === 1 ? noun : noun + "s";
+  return min === max ? `${min} ${plural}` : `${min}-${max} ${plural}`;
+}
+
+function benchStatTile(label: string, value: string): HTMLElement {
+  return el("div", { class: "bench-stat" }, [
+    el("div", { class: "bench-stat-label" }, [label]),
+    el("div", { class: "bench-stat-value" }, [value, el("span", { class: "bench-stat-unit" }, ["ms"])]),
+  ]);
+}
+
+/** The per-run bar chart: one row per completed walk, bars scaled against the slowest one. */
+function renderBenchRuns(bench: BenchmarkTabState): HTMLElement {
+  const durations = bench.runs.map((r) => r.durationMs);
+  const slowest = Math.max(...durations);
+  const fastest = Math.min(...durations);
+
+  const rows = bench.runs.map((run, i) => {
+    // An all-identical set of timings would otherwise render every bar at 0 width.
+    const width = slowest > 0 ? (run.durationMs / slowest) * 100 : 100;
+    const extreme = bench.runs.length > 1 ? (run.durationMs === fastest ? " fastest" : run.durationMs === slowest ? " slowest" : "") : "";
+    const title =
+      `${run.varbinds} varbinds in ${run.requests} request${run.requests === 1 ? "" : "s"}` +
+      (run.truncated ? " - stopped at the walk iteration cap, so this run covers only part of the subtree" : "");
+    return el("div", { class: "bench-run", title }, [
+      el("div", { class: "bench-run-index" }, [`#${i + 1}`]),
+      el("div", { class: "bench-run-track" }, [el("div", { class: "bench-run-bar" + extreme, style: { width: width + "%" } })]),
+      el("div", { class: "bench-run-time" }, [run.truncated ? "⚠ " : "", formatMs(run.durationMs) + " ms"]),
+    ]);
+  });
+
+  return el("div", { class: "bench-runs" }, rows);
+}
+
+function renderBenchmarkToolbar(store: Store, pane: PaneState, tab: BenchmarkTabState): HTMLElement {
+  const isV3 = tab.version === "v3";
+
+  const versionRow = el(
+    "div",
+    { class: "version-toggle" },
+    (["v1", "v2c", "v3"] as SnmpVersion[]).map((v) =>
+      el(
+        "button",
+        {
+          class: "version-btn" + (tab.version === v ? " active" : ""),
+          disabled: tab.running,
+          onclick: () => store.setBenchmarkVersion(pane.id, v),
+        },
+        [v],
+      ),
+    ),
+  );
+
+  const fields: HTMLElement[] = [
+    el("div", { class: "field" }, [
+      el("label", { class: "field-label" }, ["Address"]),
+      el("input", {
+        class: "field-input field-addr field-mono",
+        value: tab.hostAddr,
+        disabled: tab.running,
+        "data-focus-key": `bench:${tab.id}:addr`,
+        oninput: (e: Event) => store.updateActiveBenchmarkTabInPane(pane.id, { hostAddr: (e.target as HTMLInputElement).value }),
+      }),
+    ]),
+    el("div", { class: "field" }, [
+      el("label", { class: "field-label" }, ["Port"]),
+      el("input", {
+        class: "field-input field-port field-mono",
+        value: tab.hostPort,
+        disabled: tab.running,
+        "data-focus-key": `bench:${tab.id}:port`,
+        oninput: (e: Event) => store.updateActiveBenchmarkTabInPane(pane.id, { hostPort: (e.target as HTMLInputElement).value }),
+      }),
+    ]),
+    el("div", { class: "field" }, [el("label", { class: "field-label" }, ["Version"]), versionRow]),
+  ];
+
+  if (isV3) {
+    fields.push(
+      el("div", { class: "v3-fields" }, [
+        el("div", { class: "field" }, [
+          el("label", { class: "field-label" }, ["Security User"]),
+          el("input", {
+            class: "field-input field-v3-user",
+            value: tab.v3User,
+            disabled: tab.running,
+            "data-focus-key": `bench:${tab.id}:v3user`,
+            oninput: (e: Event) => store.updateActiveBenchmarkTabInPane(pane.id, { v3User: (e.target as HTMLInputElement).value }),
+          }),
+        ]),
+        el("div", { class: "field" }, [
+          el("label", { class: "field-label" }, ["Auth"]),
+          el("input", {
+            type: "password",
+            class: "field-input field-v3-secret",
+            value: tab.v3Auth,
+            disabled: tab.running,
+            "data-focus-key": `bench:${tab.id}:v3auth`,
+            oninput: (e: Event) => store.updateActiveBenchmarkTabInPane(pane.id, { v3Auth: (e.target as HTMLInputElement).value }),
+          }),
+        ]),
+        el("div", { class: "field" }, [
+          el("label", { class: "field-label" }, ["Priv"]),
+          el("input", {
+            type: "password",
+            class: "field-input field-v3-secret",
+            value: tab.v3Priv,
+            disabled: tab.running,
+            "data-focus-key": `bench:${tab.id}:v3priv`,
+            oninput: (e: Event) => store.updateActiveBenchmarkTabInPane(pane.id, { v3Priv: (e.target as HTMLInputElement).value }),
+          }),
+        ]),
+      ]),
+    );
+  } else {
+    fields.push(
+      el("div", { class: "field" }, [
+        el("label", { class: "field-label" }, ["Community"]),
+        el("input", {
+          class: "field-input field-community field-mono",
+          value: tab.community,
+          disabled: tab.running,
+          "data-focus-key": `bench:${tab.id}:community`,
+          oninput: (e: Event) => store.updateActiveBenchmarkTabInPane(pane.id, { community: (e.target as HTMLInputElement).value }),
+        }),
+      ]),
+    );
+  }
+
+  fields.push(
+    el("div", { class: "field" }, [
+      el("label", { class: "field-label" }, ["Runs"]),
+      el("input", {
+        type: "number",
+        min: "1",
+        max: "1000",
+        class: "field-input field-runs",
+        value: String(tab.iterations),
+        disabled: tab.running,
+        "data-focus-key": `bench:${tab.id}:iterations`,
+        oninput: (e: Event) => store.setBenchmarkIterations(pane.id, Number((e.target as HTMLInputElement).value)),
+      }),
+    ]),
+  );
+
+  fields.push(el("div", { class: "spacer" }));
+
+  const canRun = store.hasCompleteConnection(tab);
+  const runDisabledReason = canRun
+    ? ""
+    : "Fill in the host address, port, and " + (tab.version === "v3" ? "security user" : "community") + " first";
+  fields.push(
+    tab.running
+      ? el(
+          "button",
+          {
+            class: "split-btn-main bench-stop-btn",
+            style: { borderRadius: "7px", alignSelf: "flex-end" },
+            disabled: tab.cancelling,
+            onclick: () => store.cancelBenchmark(pane.id),
+          },
+          [tab.cancelling ? "Stopping…" : "Stop"],
+        )
+      : el(
+          "button",
+          {
+            class: "split-btn-main",
+            style: { borderRadius: "7px", alignSelf: "flex-end" },
+            disabled: !canRun,
+            title: runDisabledReason,
+            onclick: () => void store.runBenchmark(pane.id),
+          },
+          [tab.runs.length ? "Run again" : "Run"],
+        ),
+  );
+
+  return el("div", { class: "toolbar" }, [el("div", { class: "toolbar-row" }, fields)]);
+}
+
+function renderBenchmarkBody(tab: BenchmarkTabState): HTMLElement {
+  const stats = computeStats(tab.runs.map((r) => r.durationMs));
+
+  const body: (HTMLElement | null)[] = [
+    el("div", { class: "bench-target" }, [
+      el("div", { class: "bench-target-node" }, [tab.nodeLabel]),
+      el("div", { class: "bench-target-oid" }, [tab.oid]),
+    ]),
+  ];
+
+  const attempts = tab.runs.length + tab.failures;
+  if (tab.running || (attempts > 0 && attempts < tab.iterations)) {
+    const fraction = tab.iterations > 0 ? (attempts / tab.iterations) * 100 : 0;
+    body.push(
+      el("div", { class: "bench-progress" }, [
+        el("div", { class: "bench-progress-track" }, [el("div", { class: "bench-progress-bar", style: { width: fraction + "%" } })]),
+        el("div", { class: "bench-progress-text" }, [`${attempts} of ${tab.iterations} walks`]),
+      ]),
+    );
+  }
+
+  if (tab.error) {
+    const prefix = tab.failures > 1 ? `${tab.failures} walks failed, most recently: ` : "Walk failed: ";
+    body.push(el("div", { class: "bench-error" }, [prefix + tab.error]));
+  }
+
+  if (stats) {
+    body.push(
+      el("div", { class: "bench-stats" }, [
+        benchStatTile("Min", formatMs(stats.min)),
+        benchStatTile("Median", formatMs(stats.median)),
+        benchStatTile("Mean", formatMs(stats.mean)),
+        benchStatTile("P95", formatMs(stats.p95)),
+        benchStatTile("Max", formatMs(stats.max)),
+        benchStatTile("Std dev", formatMs(stats.stdDev)),
+      ]),
+    );
+    body.push(
+      el("div", { class: "bench-summary" }, [
+        `${stats.count} walk${stats.count === 1 ? "" : "s"}` +
+          (tab.failures > 0 ? ` (${tab.failures} failed, not counted)` : "") +
+          " · " +
+          `${formatPerWalkCount(tab.runs.map((r) => r.varbinds), "varbind")} and ` +
+          `${formatPerWalkCount(tab.runs.map((r) => r.requests), "request")} per walk · ` +
+          `${formatMs(stats.total)} ms total`,
+      ]),
+    );
+    body.push(renderBenchRuns(tab));
+  } else if (!tab.running && !tab.error) {
+    body.push(el("div", { class: "bench-empty" }, ["No timings yet - set how many walks to run, then click Run."]));
+  }
+
+  return el("div", { class: "benchmark-body" }, body);
+}
+
+function renderBenchmarkPane(store: Store, pane: PaneState, tab: BenchmarkTabState): HTMLElement[] {
+  return [renderBenchmarkToolbar(store, pane, tab), renderBenchmarkBody(tab)];
 }
 
 function renderPaneGroup(store: Store): HTMLElement {

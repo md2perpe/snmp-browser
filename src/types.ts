@@ -51,6 +51,17 @@ export interface HostProfile {
 
 export type SnmpVersion = "v1" | "v2c" | "v3";
 
+/** The connection half of an SNMP request, as the Rust `ConnectionParams` expects it. */
+export interface ConnectionParams {
+  hostAddr: string;
+  hostPort: string;
+  version: SnmpVersion;
+  community: string;
+  v3User: string;
+  v3Auth: string;
+  v3Priv: string;
+}
+
 export type Theme = "dark" | "classic";
 
 /** A fetched row's columns are whatever the selected MIB table defines - not fixed ahead of time. */
@@ -95,6 +106,41 @@ export interface TabState {
   rowMeta: Record<string, RowMetaEntry>;
   removedGhosts: Row[];
   fetchError: string | null;
+}
+
+/** One completed walk of a benchmark run, as timed by the backend. */
+export interface WalkTiming {
+  durationMs: number;
+  varbinds: number;
+  requests: number;
+  /** True when the backend's iteration cap cut the walk short, so its timing covers only part of the subtree. */
+  truncated: boolean;
+}
+
+/** A pane tab dedicated to timing repeated walks of one OID subtree - its own connection fields, independent of any query tab. */
+export interface BenchmarkTabState {
+  kind: "benchmark";
+  id: string;
+  nodeLabel: string;
+  oid: string;
+  hostAddr: string;
+  hostPort: string;
+  version: SnmpVersion;
+  community: string;
+  v3User: string;
+  v3Auth: string;
+  v3Priv: string;
+  /** How many walks a run performs; editable while idle. */
+  iterations: number;
+  running: boolean;
+  /** Set by "Stop": the in-flight walk still finishes (it can't be aborted), then the run ends. */
+  cancelling: boolean;
+  /** Timings of the walks that succeeded. */
+  runs: WalkTiming[];
+  /** Walks that failed (a dropped packet, a timeout); they're counted but have no timing to report. */
+  failures: number;
+  /** The most recent walk failure's message, kept on screen for the rest of the run. */
+  error: string | null;
 }
 
 export interface TrapVarbind {
@@ -148,7 +194,7 @@ export interface TrapTabState {
   filterText: string;
 }
 
-export type AnyTabState = TabState | TrapTabState;
+export type AnyTabState = TabState | TrapTabState | BenchmarkTabState;
 
 export interface PaneState {
   id: string;

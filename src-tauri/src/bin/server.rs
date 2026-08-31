@@ -169,6 +169,15 @@ fn handle(state: &AppState, cmd: &str, args: &Value) -> Result<Value, (u16, Stri
             result.map(|r| serde_json::to_value(&r).unwrap()).map_err(|e| (400, e))
         }
 
+        "walk_timed" => {
+            let oid = args.get("oid").and_then(Value::as_str).ok_or((400, "missing 'oid'".to_string()))?.to_string();
+            let connection: snmp::ConnectionParams = serde_json::from_value(
+                args.get("connection").cloned().ok_or((400, "missing 'connection'".to_string()))?,
+            )
+            .map_err(|e| (400, e.to_string()))?;
+            snmp::walk_timed(&connection, &oid).map(|r| serde_json::to_value(&r).unwrap()).map_err(|e| (400, e))
+        }
+
         "start_trap_listener" => {
             let id = args.get("id").and_then(Value::as_str).ok_or((400, "missing 'id'".to_string()))?.to_string();
             let config: trap::TrapListenerConfig = serde_json::from_value(

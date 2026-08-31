@@ -151,6 +151,11 @@ fn fetch(state: State<AppState>, node_id: String, connection: snmp::ConnectionPa
 }
 
 #[tauri::command]
+fn walk_timed(oid: String, connection: snmp::ConnectionParams) -> Result<snmp::WalkTiming, String> {
+    snmp::walk_timed(&connection, &oid)
+}
+
+#[tauri::command]
 fn start_trap_listener(state: State<AppState>, id: String, config: trap::TrapListenerConfig) -> Result<trap::TrapListenerStatus, String> {
     let dirs = state.settings.lock().unwrap().active_profile().map(|p| p.dirs.clone()).unwrap_or_default();
     let mut cache = state.last_parse.lock().unwrap();
@@ -211,6 +216,7 @@ pub fn run() {
             list_host_profiles,
             get_mib_tree,
             fetch,
+            walk_timed,
             start_trap_listener,
             stop_trap_listener,
             poll_traps,
