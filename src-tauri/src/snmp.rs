@@ -108,7 +108,10 @@ pub(crate) fn format_value(value: &Value, enum_values: &[(i64, String)]) -> Stri
 }
 
 pub fn fetch_scalar(params: &ConnectionParams, oid_str: &str) -> Result<FetchResult, String> {
-    let oid = oid_from_dotted(oid_str)?;
+    // A MIB scalar's own OID (as parsed from its OBJECT-TYPE assignment) names the
+    // object, not an instance - SNMP requires the ".0" instance sub-identifier for a
+    // GET to resolve, or agents report noSuchInstance on the bare object OID.
+    let oid = oid_from_dotted(&format!("{oid_str}.0"))?;
     let mut sess = open_session(params)?;
     let pdu = sess.get(&oid).map_err(|e| e.to_string())?;
     let mut row = HashMap::new();
