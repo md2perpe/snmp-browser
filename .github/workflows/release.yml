@@ -14,8 +14,11 @@ jobs:
     outputs:
       should_release: ${{ steps.check.outputs.should_release }}
       version: ${{ steps.check.outputs.version }}
+      notes: ${{ steps.check.outputs.notes }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - id: check
         name: Check whether the app version was stepped
@@ -33,9 +36,25 @@ jobs:
             echo "should_release=false" >> "$GITHUB_OUTPUT"
           else
             echo "Tag v$VERSION not found, claiming it and building the release."
+
+            # Release notes are the commit subjects since the previous tag,
+            # captured before creating this version's tag so it isn't self-listed.
+            PREV_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+            if [ -n "$PREV_TAG" ]; then
+              NOTES=$(git log --no-merges --format='- %s' "$PREV_TAG"..HEAD)
+            else
+              NOTES=$(git log --no-merges --format='- %s')
+            fi
+
             git tag "v$VERSION"
             git push origin "v$VERSION"
             echo "should_release=true" >> "$GITHUB_OUTPUT"
+
+            {
+              echo "notes<<NOTES_EOF"
+              echo "$NOTES"
+              echo "NOTES_EOF"
+            } >> "$GITHUB_OUTPUT"
           fi
 
   release:
@@ -89,7 +108,10 @@ jobs:
         with:
           tagName: v__VERSION__
           releaseName: 'v__VERSION__'
-          releaseBody: 'See the assets below to download and install this version.'
+          releaseBody: |
+            ${{ needs.check-version.outputs.notes }}
+
+            See the assets below to download and install this version.
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
