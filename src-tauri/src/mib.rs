@@ -186,6 +186,7 @@ pub fn parse_directories(dirs: &[String]) -> ParseResult {
     let mut raw: Vec<RawSymbol> = Vec::new();
     let mut sequence_types: HashMap<String, Vec<String>> = HashMap::new();
     let mut display_hints: HashMap<String, String> = HashMap::new();
+    let mut tc_enum_values: HashMap<String, Vec<(i64, String)>> = HashMap::new();
     let mut errors: Vec<FileErrors> = Vec::new();
     let mut dir_files: Vec<DirFiles> = Vec::new();
 
@@ -205,7 +206,7 @@ pub fn parse_directories(dirs: &[String]) -> ParseResult {
             if tree.root_node().has_error() {
                 push_error(&mut errors, &file, "contains syntax errors (parsed on a best-effort basis)".into());
             }
-            walk_module(tree.root_node(), src.as_bytes(), &file, &mut raw, &mut sequence_types, &mut display_hints);
+            walk_module(tree.root_node(), src.as_bytes(), &file, &mut raw, &mut sequence_types, &mut display_hints, &mut tc_enum_values);
         }
     }
 
@@ -218,7 +219,7 @@ pub fn parse_directories(dirs: &[String]) -> ParseResult {
 
     let tree = build_tree(&raw, &resolved);
     let tables_tree = build_tables_tree(&raw, &resolved);
-    let tables = build_tables(&raw, &sequence_types, &display_hints, &resolved);
+    let tables = build_tables(&raw, &sequence_types, &display_hints, &tc_enum_values, &resolved);
     let symbols = raw
         .iter()
         .filter(|s| s.kind != RawKind::Other)
@@ -253,6 +254,7 @@ fn walk_module(
     raw: &mut Vec<RawSymbol>,
     sequence_types: &mut HashMap<String, Vec<String>>,
     display_hints: &mut HashMap<String, String>,
+    tc_enum_values: &mut HashMap<String, Vec<(i64, String)>>,
 ) {
     let Some(module_def) = find_child_by_kind(root, "module_definition") else { return };
     let mut cursor = module_def.walk();
@@ -331,6 +333,16 @@ fn walk_module(
                         if let Some(string_node) = hint_clause.named_child(0) {
                             let hint = node_text(string_node, src).trim_matches('"').to_string();
                             display_hints.insert(node_text(name_node, src).to_string(), hint);
+                        }
+                    }
+                    // A TC's own SYNTAX can be an enumerated INTEGER (e.g. `SYNTAX INTEGER
+                    // { ok(1), alarm(2) }`), same as an inline OBJECT-TYPE SYNTAX - a column
+                    // whose SYNTAX is just a reference to this TC's name inherits these labels.
+                    if let Some(syntax_clause) = clauses.child_by_field_name("syntax") {
+                        if let Some(type_node) = find_child_by_kind(syntax_clause, "type") {
+                            if let Some(enum_node) = find_child_by_kind(type_node, "enum_constraint") {
+                                tc_enum_values.insert(node_text(name_node, src).to_string(), parse_enum_constraint(enum_node, src));
+                            }
                         }
                     }
                 }
@@ -586,6 +598,7 @@ fn build_tables(
     raw: &[RawSymbol],
     sequence_types: &HashMap<String, Vec<String>>,
     display_hints: &HashMap<String, String>,
+    tc_enum_values: &HashMap<String, Vec<(i64, String)>>,
     resolved: &HashMap<String, Vec<u32>>,
 ) -> HashMap<String, TableInfo> {
     let by_name: HashMap<&str, &RawSymbol> = raw.iter().map(|s| (s.name.as_str(), s)).collect();
@@ -608,12 +621,15 @@ fn build_tables(
             .map(|field_name| {
                 let col = by_name.get(field_name.as_str());
                 let display_hint = col.and_then(|c| c.syntax_type_name.as_ref()).and_then(|t| display_hints.get(t)).cloned();
-                ColumnInfo {
-                    name: field_name.clone(),
-                    arc: col.and_then(|c| last_arc(&c.oid)),
-                    enum_values: col.map(|c| c.enum_values.clone()).unwrap_or_default(),
-                    display_hint,
-                }
+                // A column's SYNTAX can enumerate its values inline (e.g. `SYNTAX INTEGER {
+                // up(1), down(2) }`), or just reference a TEXTUAL-CONVENTION that does - fall
+                // back to the TC's enum labels when the column itself declared none.
+                let enum_values = col
+                    .filter(|c| !c.enum_values.is_empty())
+                    .map(|c| c.enum_values.clone())
+                    .or_else(|| col.and_then(|c| c.syntax_type_name.as_ref()).and_then(|t| tc_enum_values.get(t)).cloned())
+                    .unwrap_or_default();
+                ColumnInfo { name: field_name.clone(), arc: col.and_then(|c| last_arc(&c.oid)), enum_values, display_hint }
             })
             .collect();
 
@@ -946,6 +962,63 @@ END
         // A column whose SYNTAX doesn't reference a TC with a DISPLAY-HINT has none.
         let label = table.columns.iter().find(|c| c.name == "dcpEnvLabel").expect("dcpEnvLabel column");
         assert_eq!(label.display_hint, None);
+    }
+
+    #[test]
+    fn enum_values_are_resolved_from_a_referenced_textual_convention() {
+        const MIB: &str = r#"
+TEST-MIB DEFINITIONS ::= BEGIN
+
+mib-2 OBJECT IDENTIFIER ::= { 1 3 6 1 2 1 }
+dcpEnv OBJECT IDENTIFIER ::= { mib-2 99 }
+
+FanStatus ::= TEXTUAL-CONVENTION
+    STATUS current
+    DESCRIPTION "Fan status"
+    SYNTAX INTEGER { notPresent(1), ok(2), alarm(3) }
+
+dcpEnvTable OBJECT-TYPE
+    SYNTAX SEQUENCE OF DcpEnvEntry
+    MAX-ACCESS not-accessible
+    STATUS current
+    DESCRIPTION "t"
+    ::= { dcpEnv 1 }
+
+dcpEnvEntry OBJECT-TYPE
+    SYNTAX DcpEnvEntry
+    MAX-ACCESS not-accessible
+    STATUS current
+    DESCRIPTION "e"
+    INDEX { dcpEnvIndex }
+    ::= { dcpEnvTable 1 }
+
+DcpEnvEntry ::= SEQUENCE {
+    dcpEnvIndex INTEGER,
+    dcpEnvFanStatus FanStatus
+}
+
+dcpEnvIndex OBJECT-TYPE
+    SYNTAX INTEGER
+    MAX-ACCESS not-accessible
+    STATUS current
+    DESCRIPTION "i"
+    ::= { dcpEnvEntry 1 }
+
+dcpEnvFanStatus OBJECT-TYPE
+    SYNTAX FanStatus
+    MAX-ACCESS read-only
+    STATUS current
+    DESCRIPTION "status"
+    ::= { dcpEnvEntry 2 }
+
+END
+"#;
+        let dir = write_fixture(MIB);
+        let result = parse_directories(&[dir.path().to_string_lossy().to_string()]);
+
+        let table = result.tables.get("dcpEnvTable").expect("dcpEnvTable definition");
+        let status = table.columns.iter().find(|c| c.name == "dcpEnvFanStatus").expect("dcpEnvFanStatus column");
+        assert_eq!(status.enum_values, vec![(1, "notPresent".to_string()), (2, "ok".to_string()), (3, "alarm".to_string())]);
     }
 
     /// Locks down the wire shape the TypeScript frontend actually deserializes:
