@@ -1,0 +1,53 @@
+name: Update Homebrew tap
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  update-tap:
+    if: '!github.event.release.prerelease'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Compute checksums of the macOS assets
+        id: sha
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          BASE="https://github.com/${{ github.repository }}/releases/download/${GITHUB_REF_NAME}"
+          curl -sL -o arm64.dmg "$BASE/SNMP.MIB.Client_${VERSION}_aarch64.dmg"
+          curl -sL -o x64.dmg "$BASE/SNMP.MIB.Client_${VERSION}_x64.dmg"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "arm_sha=$(sha256sum arm64.dmg | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          echo "intel_sha=$(sha256sum x64.dmg | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout homebrew-tap
+        uses: actions/checkout@v4
+        with:
+          repository: md2perpe/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: homebrew-tap
+
+      - name: Bump cask version and checksums
+        env:
+          VERSION: ${{ steps.sha.outputs.version }}
+          ARM_SHA: ${{ steps.sha.outputs.arm_sha }}
+          INTEL_SHA: ${{ steps.sha.outputs.intel_sha }}
+        run: |
+          cd homebrew-tap
+          CASK=Casks/snmp-mib-client.rb
+          sed -i -E "s/version \"[^\"]*\"/version \"$VERSION\"/" "$CASK"
+          sed -i -E "s/(arm:[[:space:]]*)\"[a-f0-9]{64}\"/\1\"$ARM_SHA\"/" "$CASK"
+          sed -i -E "s/(intel:[[:space:]]*)\"[a-f0-9]{64}\"/\1\"$INTEL_SHA\"/" "$CASK"
+
+      - name: Commit and push
+        run: |
+          cd homebrew-tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+          git add Casks/snmp-mib-client.rb
+          git commit -m "snmp-mib-client ${{ steps.sha.outputs.version }}"
+          git push
