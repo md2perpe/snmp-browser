@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SNMP MIB Client</title>
+  <meta name="description" content="A desktop app for browsing MIB files and polling live values from SNMP-managed devices — switches, routers, and similar network equipment." />
+  <link rel="icon" type="image/png" href="assets/icon.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+  <header class="topbar">
+    <div class="wrap topbar-inner">
+      <a class="brand" href="#top">
+        <img src="assets/icon.png" alt="" width="28" height="28" class="brand-icon" />
+        <span>SNMP MIB Client</span>
+      </a>
+      <nav class="topnav">
+        <a href="#features">Features</a>
+        <a href="#how">How it works</a>
+        <a href="#download">Download</a>
+        <a href="https://github.com/md2perpe/snmp-browser/blob/main/USAGE.md">Usage guide</a>
+        <a href="https://github.com/md2perpe/snmp-browser">GitHub</a>
+      </nav>
+    </div>
+  </header>
+
+  <main id="top">
+    <section class="hero">
+      <div class="wrap hero-inner">
+        <img src="assets/icon.png" alt="SNMP MIB Client icon" width="96" height="96" class="hero-icon" />
+        <h1>Browse MIBs. Poll devices. See what changed.</h1>
+        <p class="hero-sub">
+          A desktop app for browsing MIB files and polling live values from SNMP-managed
+          devices — switches, routers, and similar network equipment. Point it at your MIB
+          directories, pick a scalar or table, connect over SNMPv1/v2c/v3, and fetch live
+          values in a sortable, diffable table.
+        </p>
+        <div class="hero-ctas">
+          <a href="#download" id="hero-download-btn" class="btn btn-primary">
+            <span id="hero-download-label">Download</span>
+          </a>
+          <a href="https://github.com/md2perpe/snmp-browser" class="btn btn-ghost">View on GitHub</a>
+        </div>
+        <p class="hero-meta">Free &amp; open source · MIT licensed · macOS, Windows &amp; Linux</p>
+      </div>
+    </section>
+
+    <section id="features" class="section">
+      <div class="wrap">
+        <h2 class="section-title">Everything you need to poke at a MIB</h2>
+        <div class="grid features-grid">
+          <article class="card">
+            <div class="card-icon icon-blue">🌳</div>
+            <h3>MIB parsing</h3>
+            <p>Recursively parses <code>.mib</code> files in one or more directories into a
+              browsable group/table hierarchy, and flags files that fail to parse.</p>
+          </article>
+          <article class="card">
+            <div class="card-icon icon-blue">🗂️</div>
+            <h3>Profiles</h3>
+            <p>Group MIB directories into named profiles — e.g. per firmware version — and
+              switch between them instantly.</p>
+          </article>
+          <article class="card">
+            <div class="card-icon icon-blue">🧭</div>
+            <h3>Tree &amp; Tables views</h3>
+            <p>Browse the full group hierarchy, or flatten straight to just the SNMP tables
+              when you know what you're after.</p>
+          </article>
+          <article class="card">
+            <div class="card-icon icon-green">🪟</div>
+            <h3>Tabs &amp; split panes</h3>
+            <p>Open multiple tables and scalars in tabs, across up to two side-by-side
+              panes, to compare devices or tables at once.</p>
+          </article>
+          <article class="card">
+            <div class="card-icon icon-green">🔐</div>
+            <h3>SNMPv1 / v2c / v3</h3>
+            <p>Per-tab connection settings, including full v3 security, authentication and
+              privacy configuration.</p>
+          </article>
+          <article class="card">
+            <div class="card-icon icon-green">🔄</div>
+            <h3>Diff mode</h3>
+            <p>Manual or auto-refresh fetching, with a diff mode that highlights rows added,
+              removed, or changed between fetches.</p>
+          </article>
+          <article class="card">
+            <div class="card-icon icon-blue">🏷️</div>
+            <h3>Readable formatting</h3>
+            <p>Human-readable column names and DISPLAY-HINT-aware formatting turn raw MIB
+              identifiers and numeric values into something legible.</p>
+          </article>
+          <article class="card">
+            <div class="card-icon icon-green">⏱️</div>
+            <h3>Walk benchmark</h3>
+            <p>Time repeated SNMP walks of any subtree and see min/median/mean/P95/max and
+              standard deviation across the runs.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section id="how" class="section section-alt">
+      <div class="wrap">
+        <h2 class="section-title">How it works</h2>
+        <div class="steps">
+          <div class="step">
+            <div class="step-num">1</div>
+            <h3>Point it at your MIBs</h3>
+            <p>Add one or more directories of <code>.mib</code> files to a profile. They're
+              parsed immediately into a group/table hierarchy in the sidebar.</p>
+          </div>
+          <div class="step">
+            <div class="step-num">2</div>
+            <h3>Pick a table or scalar</h3>
+            <p>Browse the tree or flatten to tables, then open the node you want in a tab —
+              or right-click it to benchmark a walk instead.</p>
+          </div>
+          <div class="step">
+            <div class="step-num">3</div>
+            <h3>Connect and fetch</h3>
+            <p>Fill in the device address and SNMPv1/v2c/v3 credentials for that tab, then
+              fetch once or turn on auto-refresh.</p>
+          </div>
+          <div class="step">
+            <div class="step-num">4</div>
+            <h3>Read the results</h3>
+            <p>Sort, resize, and toggle readable names or display-hint formatting. Turn on
+              diff mode to see exactly what changed between fetches.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="download" class="section">
+      <div class="wrap">
+        <h2 class="section-title">Download</h2>
+        <p class="section-sub" id="release-sub">Loading the latest release…</p>
+
+        <div class="grid platform-grid" id="platform-grid">
+          <article class="platform-card" data-platform="mac">
+            <h3>macOS</h3>
+            <p class="platform-note">Apple Silicon &amp; Intel</p>
+            <div class="platform-links" data-slot="mac"><span class="muted">Loading…</span></div>
+            <p class="platform-note">
+              Or via Homebrew:
+              <code class="inline-code">brew install --cask md2perpe/tap/snmp-mib-client</code>
+            </p>
+            <p class="platform-note">Unsigned build — see the <a href="https://github.com/md2perpe/snmp-browser/blob/main/USAGE.md#installing">install notes</a> for the Gatekeeper workaround.</p>
+          </article>
+
+          <article class="platform-card" data-platform="windows">
+            <h3>Windows</h3>
+            <p class="platform-note">64-bit installer</p>
+            <div class="platform-links" data-slot="windows"><span class="muted">Loading…</span></div>
+          </article>
+
+          <article class="platform-card" data-platform="linux">
+            <h3>Linux</h3>
+            <p class="platform-note">.deb, .rpm, and AppImage — x86_64 &amp; ARM64</p>
+            <div class="platform-links" data-slot="linux"><span class="muted">Loading…</span></div>
+          </article>
+        </div>
+
+        <p class="section-sub small">
+          Building from source instead? See the
+          <a href="https://github.com/md2perpe/snmp-browser#development">development instructions</a>
+          in the README.
+        </p>
+      </div>
+    </section>
+
+    <section class="section section-alt">
+      <div class="wrap tech-inner">
+        <h2 class="section-title">Under the hood</h2>
+        <div class="grid tech-grid">
+          <div class="tech-item">
+            <h3>Frontend</h3>
+            <p>TypeScript + <a href="https://vitejs.dev/">Vite</a>, no framework.</p>
+          </div>
+          <div class="tech-item">
+            <h3>Backend</h3>
+            <p><a href="https://tauri.app/">Tauri 2</a> (Rust), using
+              <a href="https://crates.io/crates/snmp2"><code>snmp2</code></a> for SNMP and
+              <a href="https://tree-sitter.github.io/tree-sitter/">tree-sitter</a> with a
+              custom ASN.1 grammar to parse MIB files.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="wrap footer-inner">
+      <div>
+        <strong>SNMP MIB Client</strong> · <a href="https://github.com/md2perpe/snmp-browser/blob/main/LICENSE">MIT licensed</a>
+      </div>
+      <div class="footer-links">
+        <a href="https://github.com/md2perpe/snmp-browser">Source</a>
+        <a href="https://github.com/md2perpe/snmp-browser/issues">Issues</a>
+        <a href="https://github.com/md2perpe/snmp-browser/releases">All releases</a>
+        <a href="https://github.com/md2perpe/snmp-browser/blob/main/USAGE.md">Usage guide</a>
+      </div>
+    </div>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
