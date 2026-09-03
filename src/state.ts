@@ -33,6 +33,8 @@ const DEFAULT_SNMP_PORT = "161";
 const DEFAULT_SNMP_COMMUNITY = "public";
 const DEFAULT_TRAP_PORT = "162";
 const TRAP_POLL_INTERVAL_MS = 1000;
+/** How often to re-check for a new release - the app is commonly left open for a long time, so a startup-only check would miss releases that come out mid-session. */
+const UPDATE_CHECK_INTERVAL_MS = 60 * 60 * 1000;
 /** Client-side mirror of the server's per-listener ring buffer cap (see `trap.rs::MAX_EVENTS`), so a long-idle tab's array doesn't grow unbounded. */
 const MAX_CLIENT_TRAP_EVENTS = 2000;
 const THEME_STORAGE_KEY = "snmpBrowserTheme";
@@ -156,10 +158,13 @@ export class Store {
     this.hostProfiles = hostProfiles;
     this.notify();
     await this.loadMibTree();
-    if (isTauri) void this.runUpdateCheck();
+    if (isTauri) {
+      void this.runUpdateCheck();
+      setInterval(() => void this.runUpdateCheck(), UPDATE_CHECK_INTERVAL_MS);
+    }
   }
 
-  /** Fire-and-forget update check, run once on startup - see `checkForUpdate()` in update.ts for what "newer" means and how failures are handled. */
+  /** Fire-and-forget update check, run on startup and then every `UPDATE_CHECK_INTERVAL_MS` - see `checkForUpdate()` in update.ts for what "newer" means and how failures are handled. */
   private async runUpdateCheck() {
     const info = await checkForUpdate();
     if (!info) return;
