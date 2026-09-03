@@ -155,6 +155,13 @@ button {
   color: var(--text-primary);
 }
 
+.update-available-btn {
+  color: var(--accent);
+}
+.update-available-btn:hover {
+  color: var(--accent);
+}
+
 .sidebar-rail {
   width: 30px;
   flex: none;

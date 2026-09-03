@@ -237,4 +237,14 @@ export interface AppState {
   theme: Theme;
   /** Theme picker dropdown; null when closed. */
   themeMenu: { x: number; y: number } | null;
+  /** Set once `checkForUpdate()` finds a newer published GitHub release than the running version; null otherwise (including "not checked yet" and "dismissed"). */
+  updateInfo: UpdateInfo | null;
+}
+
+/** A newer release found on GitHub, for the sidebar's update notice. */
+export interface UpdateInfo {
+  /** e.g. "0.1.6", without the "v" tag prefix. */
+  version: string;
+  /** Release page URL to open in the user's browser. */
+  url: string;
 }

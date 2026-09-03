@@ -1,5 +1,6 @@
 import { invoke, isTauri, pickDirectory } from "./api";
 import { DEFAULT_COL_WIDTH, mockHostProfiles } from "./mockData";
+import { checkForUpdate } from "./update";
 import type {
   AnyTabState,
   AppState,
@@ -141,6 +142,7 @@ export class Store {
       refreshMenu: null,
       theme: loadTheme(),
       themeMenu: null,
+      updateInfo: null,
     };
     this.applyTheme(this.state.theme);
   }
@@ -154,6 +156,15 @@ export class Store {
     this.hostProfiles = hostProfiles;
     this.notify();
     await this.loadMibTree();
+    if (isTauri) void this.runUpdateCheck();
+  }
+
+  /** Fire-and-forget update check, run once on startup - see `checkForUpdate()` in update.ts for what "newer" means and how failures are handled. */
+  private async runUpdateCheck() {
+    const info = await checkForUpdate();
+    if (!info) return;
+    this.state.updateInfo = info;
+    this.notify();
   }
 
   private applyMibProfilesResponse(resp: MibProfilesResponse) {

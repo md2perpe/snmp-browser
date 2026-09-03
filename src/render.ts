@@ -1,3 +1,4 @@
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { el, startDrag, svgIcon } from "./dom";
 import { DEFAULT_COL_WIDTH } from "./mockData";
 import { computeStats, type Store } from "./state";
@@ -33,6 +34,32 @@ function paletteIcon(): SVGSVGElement {
 function openThemeMenu(store: Store, e: MouseEvent) {
   const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
   store.toggleThemeMenu(rect.left, rect.bottom + 4);
+}
+
+/** Circled-up-arrow icon, used for the "new version available" notice. */
+function updateAvailableIcon(): SVGSVGElement {
+  return svgIcon('<circle cx="12" cy="12" r="10"/><path d="M12 16V8"/><path d="M8 12l4-4 4 4"/>');
+}
+
+/**
+ * Icon button shown once `checkForUpdate()` (see update.ts) finds a newer
+ * published GitHub release than the running version; null otherwise. Click
+ * opens the release page in the user's default browser; middle/right-click
+ * (and everything else) does nothing special, so a stray click can't
+ * accidentally dismiss it.
+ */
+function renderUpdateButton(store: Store): HTMLElement | null {
+  const info = store.state.updateInfo;
+  if (!info) return null;
+  return el(
+    "button",
+    {
+      class: "icon-btn update-available-btn",
+      title: `Version ${info.version} is available - click to view the release`,
+      onclick: () => void openUrl(info.url),
+    },
+    [updateAvailableIcon()],
+  );
 }
 
 const AUTO_REFRESH_RING_RADIUS = 9;
@@ -338,6 +365,7 @@ function renderSidebar(store: Store): HTMLElement {
     el("div", { class: "sidebar-header" }, [
       el("button", { class: "icon-btn", title: "Hide sidebar", onclick: () => store.toggleLeft() }, [sidebarToggleIcon()]),
       el("div", { class: "spacer" }),
+      renderUpdateButton(store),
       el("button", { class: "icon-btn", title: "Theme", onclick: (e: MouseEvent) => openThemeMenu(store, e) }, [paletteIcon()]),
     ]),
     el("div", { class: "mib-dirs" }, [
@@ -514,6 +542,7 @@ function renderThemeMenu(store: Store): HTMLElement | null {
 function renderCollapsedRail(store: Store): HTMLElement {
   return el("div", { class: "sidebar-rail" }, [
     el("button", { class: "icon-btn", title: "Show sidebar", onclick: () => store.toggleLeft() }, [sidebarToggleIcon()]),
+    renderUpdateButton(store),
     el("button", { class: "icon-btn", title: "Theme", onclick: (e: MouseEvent) => openThemeMenu(store, e) }, [paletteIcon()]),
   ]);
 }
