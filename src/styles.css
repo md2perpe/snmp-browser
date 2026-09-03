@@ -1154,6 +1154,22 @@ table.data-table {
 .data-table tr {
   border-bottom: 1px solid var(--border-hair);
 }
+/* Transposed: the leftmost column (MIB column names) stays pinned while scrolling sideways through rows. */
+table.data-table-transposed th {
+  top: auto;
+}
+table.data-table-transposed thead th {
+  top: 0;
+  z-index: 2;
+}
+table.data-table-transposed tbody th:first-child {
+  left: 0;
+  z-index: 1;
+}
+table.data-table-transposed thead th:first-child {
+  left: 0;
+  z-index: 3;
+}
 .col-index {
   font-family: ui-monospace, Menlo, monospace;
   color: var(--text-muted);

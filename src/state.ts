@@ -213,6 +213,7 @@ export class Store {
       diffMode: false,
       humanReadableColumns: false,
       useDisplayHints: false,
+      transposed: false,
       workingRows: [],
       rowMeta: {},
       removedGhosts: [],
@@ -772,6 +773,10 @@ export class Store {
 
   toggleUseDisplayHints(paneId: string) {
     this.updateActiveTabInPane(paneId, (t) => ({ useDisplayHints: !t.useDisplayHints }));
+  }
+
+  toggleTransposed(paneId: string) {
+    this.updateActiveTabInPane(paneId, (t) => ({ transposed: !t.transposed }));
   }
 
   setAutoRefresh(paneId: string, value: boolean) {

@@ -104,6 +104,8 @@ export interface TabState {
   humanReadableColumns: boolean;
   /** When true, numeric values in a column with a DISPLAY-HINT (e.g. "d-1") are shown reformatted (123 -> 12.3) instead of raw. */
   useDisplayHints: boolean;
+  /** When true, the table is shown transposed: one column per fetched row, one row per MIB column - handy for a table with many columns but few rows. */
+  transposed: boolean;
   workingRows: Row[];
   rowMeta: Record<string, RowMetaEntry>;
   removedGhosts: Row[];

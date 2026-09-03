@@ -1,6 +1,7 @@
 import { el, startDrag, svgIcon } from "./dom";
+import { DEFAULT_COL_WIDTH } from "./mockData";
 import { computeStats, type Store } from "./state";
-import type { BenchmarkTabState, MibNode, PaneState, Row, SnmpVersion, TabState, Theme, TrapEvent, TrapTabState, TrapVarbind } from "./types";
+import type { BenchmarkTabState, MibNode, PaneState, Row, RowStatus, SnmpVersion, TabState, Theme, TrapEvent, TrapTabState, TrapVarbind } from "./types";
 
 const THEME_OPTIONS: { id: Theme; label: string }[] = [
   { id: "dark", label: "Dark" },
@@ -712,6 +713,17 @@ function renderTableToolbar(store: Store, pane: PaneState, tab: TabState): HTMLE
       ],
     ),
   );
+  children.push(
+    el(
+      "label",
+      {
+        class: "toggle-label",
+        title: "Show one column per fetched row and one row per MIB column - handy when there are many columns but few rows",
+        onclick: () => store.toggleTransposed(pane.id),
+      },
+      [el("div", { class: "toggle-track" + (tab.transposed ? " on" : "") }, [el("div", { class: "toggle-knob" })]), "Transpose"],
+    ),
+  );
   return el("div", { class: "table-toolbar" }, children);
 }
 
@@ -817,8 +829,21 @@ function applyDisplayHint(raw: string, hint: string): string | null {
   return `${sign}${intPart}.${fracPart}`;
 }
 
-function renderCell(colKey: string, row: Row, changed: boolean, displayHint?: string, enumLabels?: Record<string, string>): HTMLTableCellElement {
-  const bg = changed ? "var(--yellow-bg)" : "transparent";
+/**
+ * `rowStatus` is only passed in transposed mode, where a fetched row becomes a column and its
+ * added/removed styling (normally set once on the `<tr>`) has to be repeated on every cell in that column.
+ */
+function renderCell(
+  colKey: string,
+  row: Row,
+  changed: boolean,
+  displayHint?: string,
+  enumLabels?: Record<string, string>,
+  rowStatus?: RowStatus,
+): HTMLTableCellElement {
+  const bg = changed ? "var(--yellow-bg)" : rowStatus === "added" ? "var(--added-bg)" : rowStatus === "removed" ? "var(--removed-bg)" : "transparent";
+  const opacity = rowStatus === "removed" ? "0.55" : "1";
+  const textDecoration = rowStatus === "removed" ? "line-through" : "none";
   const raw = row[colKey] ?? "";
   // An enumerated column's named value takes precedence over a numeric DISPLAY-HINT -
   // in practice a column only ever has one or the other, never both.
@@ -829,17 +854,18 @@ function renderCell(colKey: string, row: Row, changed: boolean, displayHint?: st
   const title = hinted !== null && hinted !== raw ? `raw: ${raw}` : undefined;
   const color = statusColor(value);
   if (color) {
-    return el("td", { style: { background: bg }, title }, [
+    return el("td", { style: { background: bg, opacity, textDecoration }, title }, [
       el("span", { class: "status-chip", style: { color } }, [el("span", { class: "status-dot", style: { background: color } }), value]),
     ]);
   }
-  return el("td", { style: { background: bg }, title }, [value]);
+  return el("td", { style: { background: bg, opacity, textDecoration }, title }, [value]);
 }
 
 function renderTable(store: Store, pane: PaneState, tab: TabState): HTMLElement {
   if (tab.columns.length === 0) {
     return el("div", { class: "table-scroll" }, [el("div", { class: "table-empty" }, [tab.fetchError ?? "No data yet - click Fetch."])]);
   }
+  if (tab.transposed) return renderTransposedTable(store, pane, tab);
 
   const columnLabels = tab.humanReadableColumns ? humanizeColumnNames(tab.columns) : null;
   const displayHints = tab.useDisplayHints ? tab.displayHints : null;
@@ -882,6 +908,46 @@ function renderTable(store: Store, pane: PaneState, tab: TabState): HTMLElement 
 
   return el("div", { class: "table-scroll" }, [
     el("table", { class: "data-table" }, [el("thead", {}, [headRow]), el("tbody", {}, rows)]),
+  ]);
+}
+
+/** Transposed layout: one column per fetched row (identified by its first column's value), one row per MIB column. Sorting still works, just clicked on the MIB-column's row label instead of a `<th>`. */
+function renderTransposedTable(store: Store, pane: PaneState, tab: TabState): HTMLElement {
+  const columnLabels = tab.humanReadableColumns ? humanizeColumnNames(tab.columns) : null;
+  const displayHints = tab.useDisplayHints ? tab.displayHints : null;
+  const enumLabels = tab.useDisplayHints ? tab.enumLabels : null;
+  const rows = store.getSortedRows(tab);
+  const rowMetas = rows.map((row) => store.rowMetaFor(tab, row));
+
+  const headRow = el("tr", {}, [
+    el("th", { class: "transposed-corner" }, []),
+    ...rows.map((row, i) => {
+      const status = rowMetas[i]?.status;
+      const bg = status === "added" ? "var(--added-bg)" : status === "removed" ? "var(--removed-bg)" : "transparent";
+      const opacity = status === "removed" ? "0.55" : "1";
+      const textDecoration = status === "removed" ? "line-through" : "none";
+      return el("th", { style: { width: DEFAULT_COL_WIDTH + "px", background: bg, opacity, textDecoration } }, [row[tab.columns[0]] ?? String(i + 1)]);
+    }),
+  ]);
+
+  const bodyRows = tab.columns.map((col) => {
+    const sorted = tab.sortCol === col;
+    const hint = tab.displayHints[col];
+    const title = hint ? `${col} (has DISPLAY-HINT "${hint}")` : tab.enumLabels[col] ? `${col} (has named values)` : col;
+    const headerCell = el("th", { style: { width: DEFAULT_COL_WIDTH + "px" }, title }, [
+      el("div", { class: "th-btn" + (sorted ? " sorted" : ""), onclick: () => store.setSortCol(pane.id, col) }, [
+        columnLabels ? columnLabels[col] : col,
+        sorted ? el("span", { style: { fontSize: "9px" } }, [tab.sortDir === 1 ? "▲" : "▼"]) : null,
+      ]),
+    ]);
+    const cells = rows.map((row, i) =>
+      renderCell(col, row, (rowMetas[i]?.fields ?? []).includes(col), displayHints?.[col], enumLabels?.[col], rowMetas[i]?.status),
+    );
+    return el("tr", {}, [headerCell, ...cells]);
+  });
+
+  return el("div", { class: "table-scroll" }, [
+    el("table", { class: "data-table data-table-transposed" }, [el("thead", {}, [headRow]), el("tbody", {}, bodyRows)]),
   ]);
 }
 
