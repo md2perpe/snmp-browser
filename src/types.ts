@@ -234,6 +234,8 @@ export interface AppState {
   treeContextMenu: { x: number; y: number; nodeId: string } | null;
   /** Fetch mode dropdown (manual vs. auto-refresh) for a pane's split button; null when closed. */
   refreshMenu: { paneId: string; x: number; y: number } | null;
+  /** Export-format dropdown (CSV vs. PNG) for a pane's export button; null when closed. */
+  exportMenu: { paneId: string; x: number; y: number } | null;
   theme: Theme;
   /** Theme picker dropdown; null when closed. */
   themeMenu: { x: number; y: number } | null;

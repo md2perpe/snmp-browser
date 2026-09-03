@@ -142,6 +142,7 @@ export class Store {
       activePaneId: "p1",
       treeContextMenu: null,
       refreshMenu: null,
+      exportMenu: null,
       theme: loadTheme(),
       themeMenu: null,
       updateInfo: null,
@@ -547,6 +548,16 @@ export class Store {
 
   closeRefreshMenu() {
     this.state.refreshMenu = null;
+    this.notify();
+  }
+
+  toggleExportMenu(paneId: string, x: number, y: number) {
+    this.state.exportMenu = this.state.exportMenu?.paneId === paneId ? null : { paneId, x, y };
+    this.notify();
+  }
+
+  closeExportMenu() {
+    this.state.exportMenu = null;
     this.notify();
   }
 

@@ -804,24 +804,63 @@ function renderTableToolbar(store: Store, pane: PaneState, tab: TabState): HTMLE
     ),
   );
   const canExport = tab.columns.length > 0;
-  const exportLabelHint = node ? node.label : tab.selectedNode;
-  const runExport = (fn: (store: Store, tab: TabState, labelHint: string) => Promise<void>) =>
-    void fn(store, tab, exportLabelHint).catch((e) => alert("Export failed: " + (e instanceof Error ? e.message : String(e))));
   children.push(
     el(
       "button",
-      { class: "export-btn", disabled: !canExport, title: "Export the table as a CSV file", onclick: () => runExport(exportTableCsv) },
-      [downloadIcon(), "CSV"],
-    ),
-  );
-  children.push(
-    el(
-      "button",
-      { class: "export-btn", disabled: !canExport, title: "Export the table as a PNG image", onclick: () => runExport(exportTablePng) },
-      [downloadIcon(), "PNG"],
+      {
+        class: "export-btn",
+        disabled: !canExport,
+        title: "Export the table",
+        onclick: (e: MouseEvent) => {
+          const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+          store.toggleExportMenu(pane.id, rect.left, rect.bottom + 4);
+        },
+      },
+      [downloadIcon(), "Export", chevronDownIcon()],
     ),
   );
   return el("div", { class: "table-toolbar" }, children);
+}
+
+/** Runs a table export, surfacing any failure (e.g. a disk write error) with a native alert - the app has no toast/notification system for an error path this rare. */
+function runTableExport(store: Store, tab: TabState, labelHint: string, fn: (store: Store, tab: TabState, labelHint: string) => Promise<void>) {
+  void fn(store, tab, labelHint).catch((e) => alert("Export failed: " + (e instanceof Error ? e.message : String(e))));
+}
+
+/** Format picker opened by the table toolbar's "Export" button. */
+function renderExportMenu(store: Store): HTMLElement | null {
+  const menu = store.state.exportMenu;
+  if (!menu) return null;
+  const pane = store.getPane(menu.paneId);
+  const tab = pane && store.getPaneActiveTab(pane);
+  if (!pane || !tab || tab.kind !== "query" || tab.columns.length === 0) return null;
+  const node = store.findNode(store.activeTree(), tab.selectedNode);
+  const labelHint = node ? node.label : tab.selectedNode;
+
+  const item = (label: string, fn: (store: Store, tab: TabState, labelHint: string) => Promise<void>) =>
+    el(
+      "button",
+      {
+        class: "context-menu-item",
+        onclick: () => {
+          runTableExport(store, tab, labelHint, fn);
+          store.closeExportMenu();
+        },
+      },
+      [label],
+    );
+
+  return el(
+    "div",
+    { class: "context-menu-overlay", onclick: () => store.closeExportMenu(), oncontextmenu: (e: Event) => e.preventDefault() },
+    [
+      el(
+        "div",
+        { class: "context-menu", style: { left: menu.x + "px", top: menu.y + "px" }, onclick: (e: Event) => e.stopPropagation() },
+        [item("Export as CSV", exportTableCsv), item("Export as PNG", exportTablePng)],
+      ),
+    ],
+  );
 }
 
 /** A couple of literal values read like a status enum regardless of which MIB table they came from. */
@@ -1637,6 +1676,8 @@ export function renderApp(store: Store): HTMLElement {
   if (contextMenu) overlays.push(contextMenu);
   const refreshMenu = renderRefreshMenu(store);
   if (refreshMenu) overlays.push(refreshMenu);
+  const exportMenu = renderExportMenu(store);
+  if (exportMenu) overlays.push(exportMenu);
   const themeMenu = renderThemeMenu(store);
   if (themeMenu) overlays.push(themeMenu);
   if (overlays.length === 0) return appBody;
