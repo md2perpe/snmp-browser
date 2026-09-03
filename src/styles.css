@@ -1126,6 +1126,27 @@ button {
   left: 15px;
 }
 
+.export-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border: 1px solid var(--border-mid);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+.export-btn:hover {
+  background: var(--hover-strong);
+  color: var(--text-primary);
+}
+.export-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
 .table-scroll {
   flex: 1;
   overflow: auto;

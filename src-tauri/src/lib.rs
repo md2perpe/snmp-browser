@@ -186,6 +186,14 @@ fn local_ips() -> Vec<String> {
     trap::local_ips()
 }
 
+/// Writes a table export (CSV or PNG, built client-side) to a path the user already chose via
+/// the native save dialog - a plain custom command rather than the fs plugin, since a
+/// user-picked absolute path doesn't fit that plugin's scope-based permission model.
+#[tauri::command]
+fn write_export_file(path: String, data: Vec<u8>) -> Result<(), String> {
+    std::fs::write(&path, data).map_err(|e| e.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -221,7 +229,8 @@ pub fn run() {
             stop_trap_listener,
             poll_traps,
             clear_traps,
-            local_ips
+            local_ips,
+            write_export_file
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

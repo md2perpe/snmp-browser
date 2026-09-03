@@ -1,5 +1,6 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { el, startDrag, svgIcon } from "./dom";
+import { exportTableCsv, exportTablePng } from "./export";
 import { DEFAULT_COL_WIDTH } from "./mockData";
 import { computeStats, type Store } from "./state";
 import type { BenchmarkTabState, MibNode, PaneState, Row, RowStatus, SnmpVersion, TabState, Theme, TrapEvent, TrapTabState, TrapVarbind } from "./types";
@@ -17,6 +18,11 @@ function sidebarToggleIcon(): SVGSVGElement {
 /** Standard "chevron down" icon, used for the fetch-mode dropdown trigger. */
 function chevronDownIcon(): SVGSVGElement {
   return svgIcon('<path d="M6 9l6 6 6-6"/>');
+}
+
+/** Download-tray icon, used for the "export table" buttons. */
+function downloadIcon(): SVGSVGElement {
+  return svgIcon('<path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M4 21h16"/>');
 }
 
 /** Broadcast-tower icon, used for the "new trap listener tab" action. */
@@ -797,6 +803,24 @@ function renderTableToolbar(store: Store, pane: PaneState, tab: TabState): HTMLE
       [el("div", { class: "toggle-track" + (tab.transposed ? " on" : "") }, [el("div", { class: "toggle-knob" })]), "Transpose"],
     ),
   );
+  const canExport = tab.columns.length > 0;
+  const exportLabelHint = node ? node.label : tab.selectedNode;
+  const runExport = (fn: (store: Store, tab: TabState, labelHint: string) => Promise<void>) =>
+    void fn(store, tab, exportLabelHint).catch((e) => alert("Export failed: " + (e instanceof Error ? e.message : String(e))));
+  children.push(
+    el(
+      "button",
+      { class: "export-btn", disabled: !canExport, title: "Export the table as a CSV file", onclick: () => runExport(exportTableCsv) },
+      [downloadIcon(), "CSV"],
+    ),
+  );
+  children.push(
+    el(
+      "button",
+      { class: "export-btn", disabled: !canExport, title: "Export the table as a PNG image", onclick: () => runExport(exportTablePng) },
+      [downloadIcon(), "PNG"],
+    ),
+  );
   return el("div", { class: "table-toolbar" }, children);
 }
 
@@ -827,7 +851,7 @@ function capitalizeWord(word: string): string {
  * every multi-word column (typically the table name, e.g. "dcpLinkview") is stripped, then
  * the remaining words are title-cased, e.g. "dcpLinkviewLocalHostname" -> "Local Hostname".
  */
-function humanizeColumnNames(cols: string[]): Record<string, string> {
+export function humanizeColumnNames(cols: string[]): Record<string, string> {
   const wordLists = cols.map(splitIdentifierWords);
   const multiWordLists = wordLists.filter((w) => w.length > 1);
 
@@ -903,6 +927,19 @@ function applyDisplayHint(raw: string, hint: string): string | null {
 }
 
 /**
+ * Resolves a raw cell value to what should actually be shown: an enumerated column's named
+ * value takes precedence over a numeric DISPLAY-HINT - in practice a column only ever has one
+ * or the other, never both. `hinted` is true when `value` differs from `raw` (i.e. it needed
+ * some translation), which callers use to decide whether to also surface the raw value.
+ */
+export function resolveCellValue(raw: string, displayHint?: string, enumLabels?: Record<string, string>): { value: string; hinted: boolean } {
+  const hinted =
+    (enumLabels && Object.prototype.hasOwnProperty.call(enumLabels, raw) ? enumLabels[raw] : null) ??
+    (displayHint ? applyDisplayHint(raw, displayHint) : null);
+  return { value: hinted ?? raw, hinted: hinted !== null && hinted !== raw };
+}
+
+/**
  * `rowStatus` is only passed in transposed mode, where a fetched row becomes a column and its
  * added/removed styling (normally set once on the `<tr>`) has to be repeated on every cell in that column.
  */
@@ -918,13 +955,8 @@ function renderCell(
   const opacity = rowStatus === "removed" ? "0.55" : "1";
   const textDecoration = rowStatus === "removed" ? "line-through" : "none";
   const raw = row[colKey] ?? "";
-  // An enumerated column's named value takes precedence over a numeric DISPLAY-HINT -
-  // in practice a column only ever has one or the other, never both.
-  const hinted =
-    (enumLabels && Object.prototype.hasOwnProperty.call(enumLabels, raw) ? enumLabels[raw] : null) ??
-    (displayHint ? applyDisplayHint(raw, displayHint) : null);
-  const value = hinted ?? raw;
-  const title = hinted !== null && hinted !== raw ? `raw: ${raw}` : undefined;
+  const { value, hinted } = resolveCellValue(raw, displayHint, enumLabels);
+  const title = hinted ? `raw: ${raw}` : undefined;
   const color = statusColor(value);
   if (color) {
     return el("td", { style: { background: bg, opacity, textDecoration }, title }, [
