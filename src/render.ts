@@ -767,14 +767,42 @@ function humanizeColumnNames(cols: string[]): Record<string, string> {
   return labels;
 }
 
+/** The exact DISPLAY-HINT that RFC 2579's DateAndTime TEXTUAL-CONVENTION declares. */
+const DATE_AND_TIME_HINT = "2d-1d-1d,1d:1d:1d.1d,1a1d:1d";
+
+/**
+ * Parses a DateAndTime (RFC 2579) OCTET STRING - shown raw as colon-separated hex
+ * bytes, e.g. "07:e7:09:03:0f:1f:0f:00" - into an ISO 8601 timestamp. The value is
+ * 8 bytes (year-hi, year-lo, month, day, hour, minute, second, deci-second) with an
+ * optional 3 more (UTC-offset direction as ASCII '+'/'-', offset hours, offset
+ * minutes). Returns null if `raw` isn't a hex-byte string of the expected length.
+ */
+function applyDateAndTimeHint(raw: string): string | null {
+  const bytes = raw.split(":").map((b) => Number.parseInt(b, 16));
+  if (bytes.length !== 8 && bytes.length !== 11) return null;
+  if (bytes.some((b) => Number.isNaN(b) || b < 0 || b > 0xff)) return null;
+
+  const pad = (n: number, width = 2) => String(n).padStart(width, "0");
+  const [yearHi, yearLo, month, day, hour, minute, second, deciSecond] = bytes;
+  const year = (yearHi << 8) | yearLo;
+  let iso = `${pad(year, 4)}-${pad(month)}-${pad(day)}T${pad(hour)}:${pad(minute)}:${pad(second)}.${deciSecond}`;
+  if (bytes.length === 11) {
+    const sign = String.fromCharCode(bytes[8]) === "-" ? "-" : "+";
+    iso += `${sign}${pad(bytes[9])}:${pad(bytes[10])}`;
+  }
+  return iso;
+}
+
 /**
  * Applies a numeric SNMP DISPLAY-HINT ("d" or "d-N": insert a decimal point N
- * digits from the right, e.g. "d-1" turns 123 into "12.3") to a raw integer
- * string. Returns null - meaning "show raw as-is" - for hint forms this
- * doesn't recognize (e.g. OCTET STRING hex/octal/ASCII hints) or a value
- * that isn't a plain integer.
+ * digits from the right, e.g. "d-1" turns 123 into "12.3"), or the DateAndTime
+ * hint (formatted as an ISO 8601 timestamp), to a raw value string. Returns null
+ * - meaning "show raw as-is" - for hint forms this doesn't recognize (e.g. OCTET
+ * STRING hex/octal/ASCII hints) or a value that doesn't match the hint's shape.
  */
 function applyDisplayHint(raw: string, hint: string): string | null {
+  if (hint === DATE_AND_TIME_HINT) return applyDateAndTimeHint(raw);
+
   const match = /^d(?:-(\d+))?$/.exec(hint);
   if (!match) return null;
   const places = match[1] ? Number(match[1]) : 0;

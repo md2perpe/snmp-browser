@@ -185,7 +185,11 @@ pub fn parse_directories(dirs: &[String]) -> ParseResult {
 
     let mut raw: Vec<RawSymbol> = Vec::new();
     let mut sequence_types: HashMap<String, Vec<String>> = HashMap::new();
-    let mut display_hints: HashMap<String, String> = HashMap::new();
+    // Seeded with well-known SNMPv2-TC textual conventions so their DISPLAY-HINT is available
+    // even when a vendor MIB imports them without SNMPv2-TC.txt itself being among the loaded
+    // files. A loaded file that does define one of these overwrites the seeded value below.
+    let mut display_hints: HashMap<String, String> =
+        HashMap::from([("DateAndTime".to_string(), "2d-1d-1d,1d:1d:1d.1d,1a1d:1d".to_string())]);
     let mut tc_enum_values: HashMap<String, Vec<(i64, String)>> = HashMap::new();
     let mut errors: Vec<FileErrors> = Vec::new();
     let mut dir_files: Vec<DirFiles> = Vec::new();
@@ -962,6 +966,60 @@ END
         // A column whose SYNTAX doesn't reference a TC with a DISPLAY-HINT has none.
         let label = table.columns.iter().find(|c| c.name == "dcpEnvLabel").expect("dcpEnvLabel column");
         assert_eq!(label.display_hint, None);
+    }
+
+    #[test]
+    fn date_and_time_display_hint_is_known_without_snmpv2_tc_being_loaded() {
+        const MIB: &str = r#"
+TEST-MIB DEFINITIONS ::= BEGIN
+
+mib-2 OBJECT IDENTIFIER ::= { 1 3 6 1 2 1 }
+dcpEnv OBJECT IDENTIFIER ::= { mib-2 99 }
+
+dcpAlarmActiveListTable OBJECT-TYPE
+    SYNTAX SEQUENCE OF DcpAlarmActiveListEntry
+    MAX-ACCESS not-accessible
+    STATUS current
+    DESCRIPTION "t"
+    ::= { dcpEnv 1 }
+
+dcpAlarmActiveListEntry OBJECT-TYPE
+    SYNTAX DcpAlarmActiveListEntry
+    MAX-ACCESS not-accessible
+    STATUS current
+    DESCRIPTION "e"
+    INDEX { dcpAlarmActiveListIndex }
+    ::= { dcpAlarmActiveListTable 1 }
+
+DcpAlarmActiveListEntry ::= SEQUENCE {
+    dcpAlarmActiveListIndex INTEGER,
+    dcpAlarmActiveListStartTime DateAndTime
+}
+
+dcpAlarmActiveListIndex OBJECT-TYPE
+    SYNTAX INTEGER
+    MAX-ACCESS not-accessible
+    STATUS current
+    DESCRIPTION "i"
+    ::= { dcpAlarmActiveListEntry 1 }
+
+dcpAlarmActiveListStartTime OBJECT-TYPE
+    SYNTAX DateAndTime
+    MAX-ACCESS read-only
+    STATUS current
+    DESCRIPTION "start time"
+    ::= { dcpAlarmActiveListEntry 2 }
+
+END
+"#;
+        // DateAndTime is only referenced here, never defined - SNMPv2-TC.txt (where RFC 2579
+        // declares it) isn't among the loaded files, exercising the seeded fallback hint.
+        let dir = write_fixture(MIB);
+        let result = parse_directories(&[dir.path().to_string_lossy().to_string()]);
+
+        let table = result.tables.get("dcpAlarmActiveListTable").expect("dcpAlarmActiveListTable definition");
+        let start_time = table.columns.iter().find(|c| c.name == "dcpAlarmActiveListStartTime").expect("dcpAlarmActiveListStartTime column");
+        assert_eq!(start_time.display_hint, Some("2d-1d-1d,1d:1d:1d.1d,1a1d:1d".to_string()));
     }
 
     #[test]
