@@ -67,6 +67,37 @@ export function updateAutoRefreshRings(store: Store, root: HTMLElement) {
   });
 }
 
+function copyIcon(size = 12): SVGSVGElement {
+  const svg = svgIcon('<rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>');
+  svg.setAttribute("width", String(size));
+  svg.setAttribute("height", String(size));
+  return svg;
+}
+
+/** Copies `text` to the clipboard and briefly highlights `trigger` (a button wrapping `copyIcon()`) to confirm the copy. */
+function copyToClipboard(trigger: HTMLElement, text: string) {
+  void navigator.clipboard.writeText(text).then(() => {
+    trigger.classList.add("copied");
+    setTimeout(() => trigger.classList.remove("copied"), 1000);
+  });
+}
+
+/** A small button that copies `text` to the clipboard, meant to sit next to a name the user would want to paste elsewhere (a tree node or table column). */
+function copyButton(className: string, text: string, title: string): HTMLElement {
+  return el(
+    "button",
+    {
+      class: className,
+      title,
+      onclick: (e: MouseEvent) => {
+        e.stopPropagation();
+        copyToClipboard(e.currentTarget as HTMLElement, text);
+      },
+    },
+    [copyIcon()],
+  );
+}
+
 function nodeIcon(node: MibNode): HTMLElement {
   const color = node.type === "table" ? "var(--icon-table)" : node.type === "scalar" ? "var(--icon-scalar)" : "var(--icon-group)";
   if (node.type === "group") {
@@ -102,13 +133,10 @@ function renderTreeRow(store: Store, node: MibNode, depth: number, selectedNodeI
       style: { paddingLeft: depth * 16 + 2 + "px", opacity: node.resolved ? "1" : "0.45" },
       onclick: () => store.selectTreeNode(node),
       ondblclick: node.type === "table" ? () => store.openNodeInNewTab(node.id) : undefined,
-      oncontextmenu:
-        node.type !== "group" || store.canBenchmark(node)
-          ? (e: MouseEvent) => {
-              e.preventDefault();
-              store.openTreeContextMenu(e.clientX, e.clientY, node.id);
-            }
-          : undefined,
+      oncontextmenu: (e: MouseEvent) => {
+        e.preventDefault();
+        store.openTreeContextMenu(e.clientX, e.clientY, node.id);
+      },
     },
     [
       el(
@@ -131,6 +159,7 @@ function renderTreeRow(store: Store, node: MibNode, depth: number, selectedNodeI
           ),
           nodeIcon(node),
           el("div", { class: "tree-label", style: { color: textColor, fontWeight } }, [node.label]),
+          copyButton("tree-copy-btn", node.label, `Copy name "${node.label}"`),
         ],
       ),
     ],
@@ -392,6 +421,21 @@ function renderTreeContextMenu(store: Store): HTMLElement | null {
   const node = store.findNode(store.activeTree(), menu.nodeId);
 
   const items: HTMLElement[] = [];
+  if (node) {
+    items.push(
+      el(
+        "button",
+        {
+          class: "context-menu-item",
+          onclick: () => {
+            void navigator.clipboard.writeText(node.label);
+            store.closeTreeContextMenu();
+          },
+        },
+        [`Copy name "${node.label}"`],
+      ),
+    );
+  }
   if (node && node.type !== "group") {
     items.push(
       el("button", { class: "context-menu-item", onclick: () => store.openNodeInNewTab(menu.nodeId) }, [
@@ -861,6 +905,24 @@ function renderCell(
   return el("td", { style: { background: bg, opacity, textDecoration }, title }, [value]);
 }
 
+/** The sortable column-name button shown in a table header (or, in transposed mode, a row header) - label click sorts, copy button copies the raw column name. */
+function renderColumnHeaderBtn(
+  store: Store,
+  pane: PaneState,
+  tab: TabState,
+  col: string,
+  columnLabels: Record<string, string> | null,
+  sorted: boolean,
+): HTMLElement {
+  return el("div", { class: "th-btn" + (sorted ? " sorted" : "") }, [
+    el("span", { class: "th-label", onclick: () => store.setSortCol(pane.id, col) }, [
+      columnLabels ? columnLabels[col] : col,
+      sorted ? el("span", { style: { fontSize: "9px" } }, [tab.sortDir === 1 ? "▲" : "▼"]) : null,
+    ]),
+    copyButton("th-copy-btn", col, `Copy column name "${col}"`),
+  ]);
+}
+
 function renderTable(store: Store, pane: PaneState, tab: TabState): HTMLElement {
   if (tab.columns.length === 0) {
     return el("div", { class: "table-scroll" }, [el("div", { class: "table-empty" }, [tab.fetchError ?? "No data yet - click Fetch."])]);
@@ -880,10 +942,7 @@ function renderTable(store: Store, pane: PaneState, tab: TabState): HTMLElement 
       const hint = tab.displayHints[col];
       const title = hint ? `${col} (has DISPLAY-HINT "${hint}")` : tab.enumLabels[col] ? `${col} (has named values)` : col;
       return el("th", { style: { width: startWidth + "px" }, title }, [
-        el("div", { class: "th-btn" + (sorted ? " sorted" : ""), onclick: () => store.setSortCol(pane.id, col) }, [
-          columnLabels ? columnLabels[col] : col,
-          sorted ? el("span", { style: { fontSize: "9px" } }, [tab.sortDir === 1 ? "▲" : "▼"]) : null,
-        ]),
+        renderColumnHeaderBtn(store, pane, tab, col, columnLabels, sorted),
         el("div", {
           class: "th-resize-handle",
           onmousedown: (e: MouseEvent) => startDrag(e, (dx) => store.setColWidth(pane.id, col, startWidth + dx)),
@@ -935,10 +994,7 @@ function renderTransposedTable(store: Store, pane: PaneState, tab: TabState): HT
     const hint = tab.displayHints[col];
     const title = hint ? `${col} (has DISPLAY-HINT "${hint}")` : tab.enumLabels[col] ? `${col} (has named values)` : col;
     const headerCell = el("th", { style: { width: DEFAULT_COL_WIDTH + "px" }, title }, [
-      el("div", { class: "th-btn" + (sorted ? " sorted" : ""), onclick: () => store.setSortCol(pane.id, col) }, [
-        columnLabels ? columnLabels[col] : col,
-        sorted ? el("span", { style: { fontSize: "9px" } }, [tab.sortDir === 1 ? "▲" : "▼"]) : null,
-      ]),
+      renderColumnHeaderBtn(store, pane, tab, col, columnLabels, sorted),
     ]);
     const cells = rows.map((row, i) =>
       renderCell(col, row, (rowMetas[i]?.fields ?? []).includes(col), displayHints?.[col], enumLabels?.[col], rowMetas[i]?.status),
