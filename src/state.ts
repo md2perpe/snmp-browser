@@ -38,6 +38,7 @@ const UPDATE_CHECK_INTERVAL_MS = 60 * 60 * 1000;
 /** Client-side mirror of the server's per-listener ring buffer cap (see `trap.rs::MAX_EVENTS`), so a long-idle tab's array doesn't grow unbounded. */
 const MAX_CLIENT_TRAP_EVENTS = 2000;
 const THEME_STORAGE_KEY = "snmpBrowserTheme";
+const LAST_IP_STORAGE_KEY = "snmpBrowserLastIp";
 const DEFAULT_BENCHMARK_ITERATIONS = 10;
 const MAX_BENCHMARK_ITERATIONS = 1000;
 
@@ -49,6 +50,23 @@ function loadTheme(): Theme {
     // localStorage unavailable (e.g. a restrictive webview) - fall back to the default.
   }
   return "dark";
+}
+
+/** The host address most recently used for a successful-attempt fetch, so new table tabs can be pre-filled with it. */
+function loadLastIp(): string {
+  try {
+    return localStorage.getItem(LAST_IP_STORAGE_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function saveLastIp(addr: string) {
+  try {
+    localStorage.setItem(LAST_IP_STORAGE_KEY, addr);
+  } catch {
+    // localStorage unavailable - the last-used IP just won't persist across restarts.
+  }
 }
 
 /** `invoke()` rejects with a plain string under Tauri but with an Error over the HTTP fallback - unwrap both to the bare message. */
@@ -111,6 +129,9 @@ export class Store {
   dirFiles: DirFiles[] = [];
   /** This machine's non-loopback IPv4 addresses, for the trap listener's "point your device here" hint. Empty until a trap tab has been opened at least once. */
   localIps: string[] = [];
+
+  /** Host address of the most recent table fetch attempt, used to pre-fill new table tabs. Persisted so it survives restarts. */
+  private lastUsedIp: string = loadLastIp();
 
   /** Iteration count the next benchmark tab opens with - the last one the user picked. */
   private benchmarkIterations = DEFAULT_BENCHMARK_ITERATIONS;
@@ -211,7 +232,7 @@ export class Store {
       kind: "query",
       id,
       hostId: h?.id ?? "",
-      hostAddr: h?.addr ?? "",
+      hostAddr: this.lastUsedIp || h?.addr || "",
       hostPort: h?.port ?? DEFAULT_SNMP_PORT,
       version: "v2c",
       community: h?.community ?? DEFAULT_SNMP_COMMUNITY,
@@ -881,6 +902,10 @@ export class Store {
     if (!this.hasCompleteConnection(tab)) {
       tab.fetchError = "Fill in the host address, port, and " + (tab.version === "v3" ? "security user" : "community") + " first";
       return;
+    }
+    if (tab.hostAddr !== this.lastUsedIp) {
+      this.lastUsedIp = tab.hostAddr;
+      saveLastIp(tab.hostAddr);
     }
     try {
       const result = await invoke<{
