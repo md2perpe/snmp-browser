@@ -28,17 +28,31 @@ fn default_settings_path() -> PathBuf {
     PathBuf::from(home).join(".snmp-mib-client").join("settings.json")
 }
 
-fn cors_headers() -> Vec<Header> {
-    vec![
-        Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap(),
-        Header::from_bytes(&b"Access-Control-Allow-Methods"[..], &b"GET, POST, OPTIONS"[..]).unwrap(),
-        Header::from_bytes(&b"Access-Control-Allow-Headers"[..], &b"Content-Type"[..]).unwrap(),
-    ]
+fn allowed_origins() -> Vec<String> {
+    std::env::var("SNMP_MIB_CLIENT_ALLOWED_ORIGINS")
+        .unwrap_or_else(|_| "http://localhost:5173,http://127.0.0.1:5173,http://localhost:4173,http://127.0.0.1:4173".to_string())
+        .split(',')
+        .map(str::trim)
+        .filter(|origin| !origin.is_empty())
+        .map(str::to_string)
+        .collect()
 }
 
-fn json_response(status: u16, body: &Value) -> Response<std::io::Cursor<Vec<u8>>> {
+fn cors_headers(origin: Option<&str>) -> Vec<Header> {
+    let mut headers = Vec::new();
+    if let Some(origin) = origin {
+        headers.push(Header::from_bytes(&b"Access-Control-Allow-Origin"[..], origin.as_bytes()).unwrap());
+    }
+    headers.extend([
+        Header::from_bytes(&b"Access-Control-Allow-Methods"[..], &b"GET, POST, OPTIONS"[..]).unwrap(),
+        Header::from_bytes(&b"Access-Control-Allow-Headers"[..], &b"Content-Type"[..]).unwrap(),
+    ]);
+    headers
+}
+
+fn json_response(status: u16, body: &Value, origin: Option<&str>) -> Response<std::io::Cursor<Vec<u8>>> {
     let mut response = Response::from_data(serde_json::to_vec(body).unwrap()).with_status_code(status);
-    for h in cors_headers() {
+    for h in cors_headers(origin) {
         response = response.with_header(h);
     }
     response.with_header(Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap())
@@ -225,15 +239,24 @@ fn main() {
     // Seed a fresh settings.json immediately, matching the Tauri app's setup behavior.
     settings::save(&settings_path, &settings);
     let state = AppState { settings_path, settings: Mutex::new(settings), last_parse: Mutex::new(None), trap_state: trap::TrapState::default() };
+    let allowed_origins = allowed_origins();
 
     let server = Server::http(("127.0.0.1", port)).expect("failed to bind HTTP server");
     println!("SNMP MIB Client standalone backend listening on http://127.0.0.1:{port}");
     println!("Settings file: {}", state.settings_path.display());
 
     for mut request in server.incoming_requests() {
+        let origin = request.headers().iter().find(|header| header.field.equiv("Origin")).map(|header| header.value.as_str().to_string());
+        if let Some(origin) = origin.as_deref() {
+            if !allowed_origins.iter().any(|allowed| allowed == origin) {
+                let _ = request.respond(Response::from_string("origin not allowed").with_status_code(403));
+                continue;
+            }
+        }
+
         if *request.method() == Method::Options {
             let mut response = Response::empty(204);
-            for h in cors_headers() {
+            for h in cors_headers(origin.as_deref()) {
                 response = response.with_header(h);
             }
             let _ = request.respond(response);
@@ -241,7 +264,7 @@ fn main() {
         }
 
         let Some(cmd) = request.url().strip_prefix("/api/invoke/") else {
-            let _ = request.respond(json_response(404, &json!("not found")));
+            let _ = request.respond(json_response(404, &json!("not found"), origin.as_deref()));
             continue;
         };
         let cmd = cmd.to_string();
@@ -252,10 +275,10 @@ fn main() {
 
         match handle(&state, &cmd, &args) {
             Ok(v) => {
-                let _ = request.respond(json_response(200, &v));
+                let _ = request.respond(json_response(200, &v, origin.as_deref()));
             }
             Err((status, msg)) => {
-                let _ = request.respond(json_response(status, &json!(msg)));
+                let _ = request.respond(json_response(status, &json!(msg), origin.as_deref()));
             }
         }
     }
