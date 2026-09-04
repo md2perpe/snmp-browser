@@ -6,9 +6,12 @@
 
 use serde_json::{json, Value};
 use snmp_mib_client_lib::{mib, settings, snmp, trap};
+use std::io::Read;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tiny_http::{Header, Method, Response, Server};
+
+const MAX_REQUEST_BODY_BYTES: u64 = 1024 * 1024;
 
 struct AppState {
     settings_path: PathBuf,
@@ -247,7 +250,14 @@ fn main() {
         let cmd = cmd.to_string();
 
         let mut body = String::new();
-        let _ = request.as_reader().read_to_string(&mut body);
+        let body_too_large = {
+            let mut reader = request.as_reader().take(MAX_REQUEST_BODY_BYTES + 1);
+            reader.read_to_string(&mut body).is_err() || body.len() as u64 > MAX_REQUEST_BODY_BYTES
+        };
+        if body_too_large {
+            let _ = request.respond(Response::from_string("request body too large").with_status_code(413));
+            continue;
+        }
         let args: Value = if body.trim().is_empty() { json!({}) } else { serde_json::from_str(&body).unwrap_or(json!({})) };
 
         match handle(&state, &cmd, &args) {
