@@ -5,7 +5,7 @@
 //! with CORS enabled so a Vite dev server on a different port can call it.
 
 use serde_json::{json, Value};
-use snmp_mib_client_lib::{mib, settings, snmp, trap};
+use snmp_mib_client_lib::{gnmi, mib, settings, snmp, trap};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tiny_http::{Header, Method, Response, Server};
@@ -49,8 +49,9 @@ fn profiles_response(settings: &settings::Settings) -> Value {
 }
 
 /// Mirrors the command dispatch in `lib.rs`'s `invoke_handler!`, minus the
-/// Tauri-specific plumbing.
-fn handle(state: &AppState, cmd: &str, args: &Value) -> Result<Value, (u16, String)> {
+/// Tauri-specific plumbing. `rt` bridges the two `gnmi_*` commands (the only
+/// async ones) into this otherwise fully synchronous, single-threaded loop.
+fn handle(state: &AppState, rt: &tokio::runtime::Runtime, cmd: &str, args: &Value) -> Result<Value, (u16, String)> {
     match cmd {
         "list_mib_profiles" => Ok(profiles_response(&state.settings.lock().unwrap())),
 
@@ -214,6 +215,23 @@ fn handle(state: &AppState, cmd: &str, args: &Value) -> Result<Value, (u16, Stri
 
         "local_ips" => Ok(serde_json::to_value(trap::local_ips()).unwrap()),
 
+        "gnmi_capabilities" => {
+            let connection: gnmi::GnmiConnectionParams = serde_json::from_value(
+                args.get("connection").cloned().ok_or((400, "missing 'connection'".to_string()))?,
+            )
+            .map_err(|e| (400, e.to_string()))?;
+            rt.block_on(gnmi::capabilities(&connection)).map(|r| serde_json::to_value(&r).unwrap()).map_err(|e| (400, e))
+        }
+
+        "gnmi_get" => {
+            let connection: gnmi::GnmiConnectionParams = serde_json::from_value(
+                args.get("connection").cloned().ok_or((400, "missing 'connection'".to_string()))?,
+            )
+            .map_err(|e| (400, e.to_string()))?;
+            let path = args.get("path").and_then(Value::as_str).ok_or((400, "missing 'path'".to_string()))?.to_string();
+            rt.block_on(gnmi::get(&connection, &path)).map(|r| serde_json::to_value(&r).unwrap()).map_err(|e| (400, e))
+        }
+
         other => Err((404, format!("unknown command '{other}'"))),
     }
 }
@@ -225,6 +243,9 @@ fn main() {
     // Seed a fresh settings.json immediately, matching the Tauri app's setup behavior.
     settings::save(&settings_path, &settings);
     let state = AppState { settings_path, settings: Mutex::new(settings), last_parse: Mutex::new(None), trap_state: trap::TrapState::default() };
+    // Bridges the two async `gnmi_*` commands into this otherwise fully synchronous,
+    // single-threaded request loop - built once, not per-request.
+    let rt = tokio::runtime::Runtime::new().expect("failed to start the async runtime for gNMI commands");
 
     let server = Server::http(("127.0.0.1", port)).expect("failed to bind HTTP server");
     println!("SNMP MIB Client standalone backend listening on http://127.0.0.1:{port}");
@@ -250,7 +271,7 @@ fn main() {
         let _ = request.as_reader().read_to_string(&mut body);
         let args: Value = if body.trim().is_empty() { json!({}) } else { serde_json::from_str(&body).unwrap_or(json!({})) };
 
-        match handle(&state, &cmd, &args) {
+        match handle(&state, &rt, &cmd, &args) {
             Ok(v) => {
                 let _ = request.respond(json_response(200, &v));
             }

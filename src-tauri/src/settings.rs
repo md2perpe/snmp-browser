@@ -26,12 +26,38 @@ pub struct MibProfile {
     pub dirs: Vec<String>,
 }
 
+/// A named set of directories to scan for `.yang` files - the gNMI-side counterpart to
+/// `MibProfile`. Kept as its own field/struct rather than folded into `MibProfile` since the two
+/// are independent (different tabs, different file types), even though the shape matches.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct YangProfile {
+    pub id: String,
+    pub name: String,
+    pub dirs: Vec<String>,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
     pub mib_profiles: Vec<MibProfile>,
     pub active_mib_profile_id: String,
+    #[serde(default = "default_yang_profiles")]
+    pub yang_profiles: Vec<YangProfile>,
+    #[serde(default = "default_yang_profile_id")]
+    pub active_yang_profile_id: String,
     pub host_profiles: Vec<HostProfile>,
+}
+
+/// Existing settings.json files predate `yang_profiles` - these `serde(default = ...)` fns seed
+/// the same single "Default" profile shape a fresh install gets, so loading an old file doesn't
+/// leave YANG profile state missing or inconsistent with `active_yang_profile_id`.
+fn default_yang_profiles() -> Vec<YangProfile> {
+    vec![YangProfile { id: "default".to_string(), name: "Default".into(), dirs: Vec::new() }]
+}
+
+fn default_yang_profile_id() -> String {
+    "default".to_string()
 }
 
 /// Pre-profiles settings shape (a single flat `mibDirs` list), kept only to
@@ -54,6 +80,8 @@ impl Default for Settings {
         Settings {
             mib_profiles: vec![MibProfile { id: id.clone(), name: "Default".into(), dirs: Vec::new() }],
             active_mib_profile_id: id,
+            yang_profiles: default_yang_profiles(),
+            active_yang_profile_id: default_yang_profile_id(),
             host_profiles: Vec::new(),
         }
     }
@@ -66,6 +94,38 @@ impl Settings {
 
     pub fn active_profile_mut(&mut self) -> Option<&mut MibProfile> {
         self.mib_profiles.iter_mut().find(|p| p.id == self.active_mib_profile_id)
+    }
+
+    pub fn active_yang_profile(&self) -> Option<&YangProfile> {
+        self.yang_profiles.iter().find(|p| p.id == self.active_yang_profile_id)
+    }
+
+    pub fn active_yang_profile_mut(&mut self) -> Option<&mut YangProfile> {
+        self.yang_profiles.iter_mut().find(|p| p.id == self.active_yang_profile_id)
+    }
+
+    pub fn add_yang_profile(&mut self, name: String) -> &YangProfile {
+        let id = new_profile_id();
+        self.yang_profiles.push(YangProfile { id: id.clone(), name, dirs: Vec::new() });
+        self.active_yang_profile_id = id;
+        self.yang_profiles.last().unwrap()
+    }
+
+    /// No-ops if `id` is the only remaining profile - there must always be at least one.
+    pub fn remove_yang_profile(&mut self, id: &str) {
+        if self.yang_profiles.len() <= 1 {
+            return;
+        }
+        self.yang_profiles.retain(|p| p.id != id);
+        if self.active_yang_profile_id == id {
+            self.active_yang_profile_id = self.yang_profiles[0].id.clone();
+        }
+    }
+
+    pub fn rename_yang_profile(&mut self, id: &str, name: String) {
+        if let Some(p) = self.yang_profiles.iter_mut().find(|p| p.id == id) {
+            p.name = name;
+        }
     }
 
     pub fn add_mib_profile(&mut self, name: String) -> &MibProfile {
@@ -106,6 +166,8 @@ pub fn load(path: &PathBuf) -> Settings {
         return Settings {
             mib_profiles: vec![MibProfile { id: id.clone(), name: "Default".into(), dirs: old.mib_dirs }],
             active_mib_profile_id: id,
+            yang_profiles: default_yang_profiles(),
+            active_yang_profile_id: default_yang_profile_id(),
             host_profiles: old.host_profiles,
         };
     }
