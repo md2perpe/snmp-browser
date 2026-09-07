@@ -40,6 +40,34 @@ export interface MibProfilesResponse {
   activeProfileId: string;
 }
 
+/** A YANG schema tree node - the gNMI-side counterpart to `MibNode`, built from local `.yang` files instead of a live Get. */
+export interface YangNode {
+  id: string;
+  label: string;
+  /** Absolute gNMI xpath-style path, or "" for a node that isn't itself a valid fetch target (an unresolved `uses`). */
+  path: string;
+  resolved: boolean;
+  type: NodeType;
+  children: YangNode[];
+}
+
+export interface YangParseResult {
+  tree: YangNode[];
+  errors: FileErrors[];
+  dirFiles: DirFiles[];
+}
+
+export interface YangProfile {
+  id: string;
+  name: string;
+  dirs: string[];
+}
+
+export interface YangProfilesResponse {
+  profiles: YangProfile[];
+  activeProfileId: string;
+}
+
 export interface HostProfile {
   id: string;
   label: string;
@@ -147,6 +175,59 @@ export interface BenchmarkTabState {
   error: string | null;
 }
 
+export type TlsMode = "insecure" | "tls" | "tlsSkipVerify";
+
+/** The connection half of a gNMI request, as the Rust `gnmi::GnmiConnectionParams` expects it. */
+export interface GnmiConnectionParams {
+  hostAddr: string;
+  hostPort: string;
+  tlsMode: TlsMode;
+  caCertPath: string | null;
+  clientCertPath: string | null;
+  clientKeyPath: string | null;
+  username: string | null;
+  password: string | null;
+}
+
+/** One element of a decoded gNMI Get result tree - a path segment, its value (present on leaves), and any children. */
+export interface GnmiNode {
+  name: string;
+  value: string | null;
+  children: GnmiNode[];
+}
+
+/** A pane tab dedicated to browsing a gNMI target's Capabilities and running one-shot Get requests against a manually-typed path - its own connection fields, independent of any SNMP query tab. */
+export interface GnmiTabState {
+  kind: "gnmi";
+  id: string;
+  hostAddr: string;
+  hostPort: string;
+  tlsMode: TlsMode;
+  caCertPath: string;
+  clientCertPath: string;
+  clientKeyPath: string;
+  username: string;
+  password: string;
+  /** Manually-typed gNMI xpath-style path, e.g. "/interfaces/interface[name=eth0]/state". */
+  path: string;
+  /** Last successful Capabilities response, or null before the first call. */
+  capabilities: GnmiCapabilities | null;
+  /** Last successful Get result's roots, or null before the first fetch. */
+  result: GnmiNode[] | null;
+  /** Tree-expand state for `result`, keyed by each node's path-so-far. */
+  expandedIds: Record<string, boolean>;
+  loading: boolean;
+  fetchError: string | null;
+  lastFetch: string;
+}
+
+/** A target's advertised gNMI version, encodings, and supported YANG models, from the Capabilities RPC. */
+export interface GnmiCapabilities {
+  gnmiVersion: string;
+  supportedEncodings: string[];
+  supportedModels: { name: string; organization: string; version: string }[];
+}
+
 export interface TrapVarbind {
   oid: string;
   /** MIB-resolved name (e.g. "ifDescr.3"), or the same as `oid` when nothing matched. */
@@ -198,7 +279,7 @@ export interface TrapTabState {
   filterText: string;
 }
 
-export type AnyTabState = TabState | TrapTabState | BenchmarkTabState;
+export type AnyTabState = TabState | TrapTabState | BenchmarkTabState | GnmiTabState;
 
 export interface PaneState {
   id: string;
@@ -226,6 +307,16 @@ export interface AppState {
   renamingMibProfile: boolean;
   parseErrors: FileErrors[];
   parseErrorsOpen: boolean;
+  /** Named sets of YANG directories, mirroring `mibProfiles` - only the active one's directories are parsed for the gNMI schema tree. */
+  yangProfiles: YangProfile[];
+  activeYangProfileId: string;
+  yangDirDraft: string | null;
+  yangProfileDraft: string | null;
+  renamingYangProfile: boolean;
+  yangParseErrors: FileErrors[];
+  yangParseErrorsOpen: boolean;
+  /** Id of the YANG tree row highlighted by a single click - the YANG counterpart to `selectedTreeNodeId`. */
+  selectedYangNodeId: string;
   leftWidth: number;
   leftCollapsed: boolean;
   panes: PaneState[];

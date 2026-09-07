@@ -3,7 +3,25 @@ import { el, startDrag, svgIcon } from "./dom";
 import { exportTableCsv, exportTablePng } from "./export";
 import { DEFAULT_COL_WIDTH } from "./mockData";
 import { computeStats, type Store } from "./state";
-import type { BenchmarkTabState, MibNode, PaneState, Row, RowStatus, SnmpVersion, TabState, Theme, TrapEvent, TrapTabState, TrapVarbind } from "./types";
+import type {
+  BenchmarkTabState,
+  FileErrors,
+  GnmiNode,
+  GnmiTabState,
+  MibNode,
+  NodeType,
+  PaneState,
+  Row,
+  RowStatus,
+  SnmpVersion,
+  TabState,
+  Theme,
+  TlsMode,
+  TrapEvent,
+  TrapTabState,
+  TrapVarbind,
+  YangNode,
+} from "./types";
 
 const THEME_OPTIONS: { id: Theme; label: string }[] = [
   { id: "dark", label: "Dark" },
@@ -28,6 +46,13 @@ function downloadIcon(): SVGSVGElement {
 /** Broadcast-tower icon, used for the "new trap listener tab" action. */
 function trapListenerIcon(): SVGSVGElement {
   return svgIcon('<path d="M12 2v5"/><path d="M12 22v-6"/><path d="M5 9a7 7 0 0 1 14 0"/><circle cx="12" cy="9" r="2"/>');
+}
+
+/** Connected-nodes icon, used for the "new gNMI tab" action. */
+function gnmiTabIcon(): SVGSVGElement {
+  return svgIcon(
+    '<circle cx="5" cy="6" r="2.5"/><circle cx="19" cy="6" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="M7 7l3 8"/><path d="M17 7l-3 8"/>',
+  );
 }
 
 /** Paint-palette icon, used for the theme picker. */
@@ -131,7 +156,7 @@ function copyButton(className: string, text: string, title: string): HTMLElement
   );
 }
 
-function nodeIcon(node: MibNode): HTMLElement {
+function nodeIcon(node: { type: NodeType }): HTMLElement {
   const color = node.type === "table" ? "var(--icon-table)" : node.type === "scalar" ? "var(--icon-scalar)" : "var(--icon-group)";
   if (node.type === "group") {
     return el("div", { class: "tree-icon-group" }, [
@@ -257,7 +282,7 @@ function renderSidebar(store: Store): HTMLElement {
       ? null
       : el("div", { class: "mib-dir-draft-row" }, [
           el("input", {
-            class: "mib-dir-draft-input",
+            class: "mib-dir-draft-input snmp-dir-draft-input",
             placeholder: "/absolute/path/to/mibs",
             value: draft,
             "data-focus-key": "mibDirDraft",
@@ -374,6 +399,7 @@ function renderSidebar(store: Store): HTMLElement {
       renderUpdateButton(store),
       el("button", { class: "icon-btn", title: "Theme", onclick: (e: MouseEvent) => openThemeMenu(store, e) }, [paletteIcon()]),
     ]),
+    el("div", { class: "sidebar-section-head" }, ["SNMP (MIB)"]),
     el("div", { class: "mib-dirs" }, [
       profileRow,
       renameRow,
@@ -390,7 +416,7 @@ function renderSidebar(store: Store): HTMLElement {
               // on the native-picker path), so the draft input already exists
               // in the DOM by the time this call returns in browser mode.
               void store.addMibDir();
-              document.querySelector<HTMLInputElement>(".mib-dir-draft-input")?.focus();
+              document.querySelector<HTMLInputElement>(".snmp-dir-draft-input")?.focus();
             },
           },
           ["+"],
@@ -423,11 +449,12 @@ function renderSidebar(store: Store): HTMLElement {
       { class: "tree", "data-preserve-scroll": "tree" },
       visibleNodes.map(({ node, depth }) => renderTreeRow(store, node, depth, selectedNodeId)),
     ),
+    ...renderYangSection(store),
   ]);
 }
 
-function renderParseErrorsModal(store: Store): HTMLElement {
-  const groups = store.state.parseErrors.map((fe) =>
+function renderParseErrorsModal(title: string, errors: FileErrors[], onClose: () => void): HTMLElement {
+  const groups = errors.map((fe) =>
     el("div", { class: "parse-error-group" }, [
       el("div", { class: "parse-error-file" }, [fe.file]),
       el(
@@ -438,11 +465,11 @@ function renderParseErrorsModal(store: Store): HTMLElement {
     ]),
   );
 
-  return el("div", { class: "modal-overlay", onclick: () => store.toggleParseErrors() }, [
+  return el("div", { class: "modal-overlay", onclick: onClose }, [
     el("div", { class: "modal-panel", onclick: (e: Event) => e.stopPropagation() }, [
       el("div", { class: "modal-header" }, [
-        el("div", { class: "modal-title" }, ["Parse issues"]),
-        el("button", { class: "icon-btn", title: "Close", onclick: () => store.toggleParseErrors() }, ["✕"]),
+        el("div", { class: "modal-title" }, [title]),
+        el("button", { class: "icon-btn", title: "Close", onclick: onClose }, ["✕"]),
       ]),
       el("div", { class: "modal-body" }, groups),
     ]),
@@ -568,6 +595,9 @@ function renderTabBar(store: Store, pane: PaneState): HTMLElement {
     } else if (tab.kind === "benchmark") {
       label = "Benchmark · " + tab.nodeLabel;
       dotClass += tab.error ? " error" : tab.running ? "" : " off";
+    } else if (tab.kind === "gnmi") {
+      label = "gNMI · " + (tab.hostAddr || "(no target)");
+      dotClass += tab.fetchError ? " error" : "";
     } else {
       const host = store.hostProfiles.find((h) => h.id === tab.hostId);
       label = (host ? host.label : tab.hostAddr || "(no address)") + " · " + tab.selectedNode;
@@ -612,6 +642,7 @@ function renderTabBar(store: Store, pane: PaneState): HTMLElement {
       { class: "pane-action", title: "New trap listener tab", onclick: () => store.openTrapListenerTab(pane.id) },
       [trapListenerIcon()],
     ),
+    el("button", { class: "pane-action", title: "New gNMI tab", onclick: () => store.openGnmiTab(pane.id) }, [gnmiTabIcon()]),
     el("div", { class: "tab-bar-spacer" }),
     canSplit ? el("button", { class: "pane-action", title: "Split right", onclick: () => store.splitPane(pane.id) }, ["⊟"]) : null,
     canClosePane ? el("button", { class: "pane-action", title: "Close group", onclick: () => store.closePane(pane.id) }, ["✕"]) : null,
@@ -1138,6 +1169,8 @@ function renderPane(store: Store, pane: PaneState, isLast: boolean): HTMLElement
     body = [renderTrapToolbar(store, pane, tab), renderTrapTable(store, pane, tab)];
   } else if (tab.kind === "benchmark") {
     body = renderBenchmarkPane(store, pane, tab);
+  } else if (tab.kind === "gnmi") {
+    body = renderGnmiPane(store, pane, tab);
   } else {
     body = [renderToolbar(store, pane, tab), renderTableToolbar(store, pane, tab), renderTable(store, pane, tab), renderStatusBar(tab)];
   }
@@ -1644,6 +1677,452 @@ function renderBenchmarkPane(store: Store, pane: PaneState, tab: BenchmarkTabSta
   return [renderBenchmarkToolbar(store, pane, tab), renderBenchmarkBody(tab)];
 }
 
+// ---------- gNMI tab ----------
+
+const TLS_MODE_OPTIONS: { id: TlsMode; label: string }[] = [
+  { id: "insecure", label: "Insecure" },
+  { id: "tls", label: "TLS" },
+  { id: "tlsSkipVerify", label: "Skip Verify" },
+];
+
+function renderGnmiToolbar(store: Store, pane: PaneState, tab: GnmiTabState): HTMLElement {
+  const tlsRow = el(
+    "div",
+    { class: "version-toggle" },
+    TLS_MODE_OPTIONS.map((opt) =>
+      el(
+        "button",
+        {
+          class: "version-btn" + (tab.tlsMode === opt.id ? " active" : ""),
+          disabled: tab.loading,
+          onclick: () => store.setGnmiTlsMode(pane.id, opt.id),
+        },
+        [opt.label],
+      ),
+    ),
+  );
+
+  const fields: HTMLElement[] = [
+    el("div", { class: "field" }, [
+      el("label", { class: "field-label" }, ["Address"]),
+      el("input", {
+        class: "field-input field-addr field-mono",
+        value: tab.hostAddr,
+        disabled: tab.loading,
+        "data-focus-key": `gnmi:${tab.id}:addr`,
+        oninput: (e: Event) => store.updateActiveGnmiTabInPane(pane.id, { hostAddr: (e.target as HTMLInputElement).value }),
+      }),
+    ]),
+    el("div", { class: "field" }, [
+      el("label", { class: "field-label" }, ["Port"]),
+      el("input", {
+        class: "field-input field-port field-mono",
+        value: tab.hostPort,
+        disabled: tab.loading,
+        "data-focus-key": `gnmi:${tab.id}:port`,
+        oninput: (e: Event) => store.updateActiveGnmiTabInPane(pane.id, { hostPort: (e.target as HTMLInputElement).value }),
+      }),
+    ]),
+    el("div", { class: "field" }, [el("label", { class: "field-label" }, ["TLS"]), tlsRow]),
+    el("div", { class: "field" }, [
+      el("label", { class: "field-label" }, ["Username"]),
+      el("input", {
+        class: "field-input field-v3-user",
+        value: tab.username,
+        disabled: tab.loading,
+        "data-focus-key": `gnmi:${tab.id}:username`,
+        oninput: (e: Event) => store.updateActiveGnmiTabInPane(pane.id, { username: (e.target as HTMLInputElement).value }),
+      }),
+    ]),
+    el("div", { class: "field" }, [
+      el("label", { class: "field-label" }, ["Password"]),
+      el("input", {
+        type: "password",
+        class: "field-input field-v3-secret",
+        value: tab.password,
+        disabled: tab.loading,
+        "data-focus-key": `gnmi:${tab.id}:password`,
+        oninput: (e: Event) => store.updateActiveGnmiTabInPane(pane.id, { password: (e.target as HTMLInputElement).value }),
+      }),
+    ]),
+  ];
+
+  if (tab.tlsMode === "tls") {
+    fields.push(
+      el("div", { class: "field" }, [
+        el("label", { class: "field-label" }, ["CA Cert Path"]),
+        el("input", {
+          class: "field-input field-community field-mono",
+          value: tab.caCertPath,
+          disabled: tab.loading,
+          "data-focus-key": `gnmi:${tab.id}:cacert`,
+          oninput: (e: Event) => store.updateActiveGnmiTabInPane(pane.id, { caCertPath: (e.target as HTMLInputElement).value }),
+        }),
+      ]),
+    );
+  }
+
+  const canRun = store.hasCompleteGnmiConnection(tab);
+  const runDisabledReason = canRun ? "" : "Fill in the target address and port first";
+  fields.push(el("div", { class: "spacer" }));
+  fields.push(
+    el(
+      "button",
+      {
+        class: "toolbar-btn",
+        disabled: !canRun || tab.loading,
+        title: runDisabledReason,
+        onclick: () => void store.runGnmiCapabilities(pane.id),
+      },
+      ["Capabilities"],
+    ),
+  );
+
+  const pathRow = el("div", { class: "toolbar-row" }, [
+    el("div", { class: "field", style: { flex: "1" } }, [
+      el("label", { class: "field-label" }, ["Path"]),
+      el("input", {
+        class: "field-input field-mono",
+        style: { width: "100%" },
+        placeholder: "/interfaces/interface[name=eth0]/state",
+        value: tab.path,
+        disabled: tab.loading,
+        "data-focus-key": `gnmi:${tab.id}:path`,
+        oninput: (e: Event) => store.updateActiveGnmiTabInPane(pane.id, { path: (e.target as HTMLInputElement).value }),
+      }),
+    ]),
+    el(
+      "button",
+      {
+        class: "split-btn-main",
+        style: { borderRadius: "7px", alignSelf: "flex-end", height: "28px" },
+        disabled: !canRun || tab.loading || !tab.path.trim(),
+        title: runDisabledReason,
+        onclick: () => void store.runGnmiGet(pane.id),
+      },
+      [tab.loading ? "Fetching…" : "Get"],
+    ),
+  ]);
+
+  return el("div", { class: "toolbar" }, [el("div", { class: "toolbar-row" }, fields), pathRow]);
+}
+
+/** Stable identity for a gNMI result node's expand/collapse state - its path-so-far, since the tree has no other per-node id. */
+function gnmiNodeKey(parentKey: string, node: GnmiNode): string {
+  return parentKey ? `${parentKey}/${node.name}` : node.name;
+}
+
+function gnmiNodeIcon(hasChildren: boolean): HTMLElement {
+  if (hasChildren) {
+    return el("div", { class: "tree-icon-group" }, [
+      el("div", { class: "lid", style: { background: "var(--icon-group)" } }),
+      el("div", { class: "body", style: { background: "var(--icon-group)" } }),
+    ]);
+  }
+  return el("div", { class: "tree-icon-scalar", style: { background: "var(--icon-scalar)" } });
+}
+
+function renderGnmiNode(store: Store, pane: PaneState, tab: GnmiTabState, node: GnmiNode, parentKey: string, depth: number): HTMLElement[] {
+  const key = gnmiNodeKey(parentKey, node);
+  const hasChildren = node.children.length > 0;
+  const expanded = !!tab.expandedIds[key];
+  const selected = key === tab.path;
+  const row = el(
+    "div",
+    {
+      class: "gnmi-tree-row" + (selected ? " selected" : ""),
+      style: { paddingLeft: depth * 16 + 2 + "px" },
+      title: key,
+      onclick: () => store.updateActiveGnmiTabInPane(pane.id, { path: key }),
+      ondblclick: () => {
+        store.updateActiveGnmiTabInPane(pane.id, { path: key });
+        void store.runGnmiGet(pane.id);
+      },
+    },
+    [
+      el(
+        "div",
+        {
+          class: "gnmi-tree-caret",
+          style: { visibility: hasChildren ? "visible" : "hidden", transform: `rotate(${hasChildren && expanded ? 90 : 0}deg)` },
+          onclick: hasChildren
+            ? (e: MouseEvent) => {
+                e.stopPropagation();
+                store.toggleGnmiNodeExpanded(pane.id, key);
+              }
+            : undefined,
+        },
+        ["▶"],
+      ),
+      gnmiNodeIcon(hasChildren),
+      el("span", { class: "gnmi-tree-name" }, [node.name]),
+      node.value != null ? el("span", { class: "gnmi-tree-value" }, [node.value]) : null,
+      copyButton("tree-copy-btn", node.value ?? node.name, `Copy ${node.value != null ? "value" : "name"}`),
+    ],
+  );
+  const out: HTMLElement[] = [row];
+  if (hasChildren && expanded) {
+    for (const child of node.children) out.push(...renderGnmiNode(store, pane, tab, child, key, depth + 1));
+  }
+  return out;
+}
+
+function renderGnmiCapabilities(caps: NonNullable<GnmiTabState["capabilities"]>): HTMLElement {
+  return el("div", { class: "gnmi-caps" }, [
+    el("div", { class: "gnmi-caps-row" }, [el("span", { class: "gnmi-caps-label" }, ["gNMI version"]), caps.gnmiVersion]),
+    el("div", { class: "gnmi-caps-row" }, [
+      el("span", { class: "gnmi-caps-label" }, ["Encodings"]),
+      caps.supportedEncodings.join(", ") || "(none reported)",
+    ]),
+    el("div", { class: "gnmi-caps-row" }, [el("span", { class: "gnmi-caps-label" }, ["Models"]), String(caps.supportedModels.length)]),
+    el(
+      "div",
+      { class: "gnmi-caps-models" },
+      caps.supportedModels.map((m) => el("div", { class: "gnmi-caps-model" }, [`${m.name} (${m.organization}) ${m.version}`])),
+    ),
+  ]);
+}
+
+function renderGnmiBody(store: Store, pane: PaneState, tab: GnmiTabState): HTMLElement {
+  if (tab.fetchError) {
+    return el("div", { class: "table-scroll" }, [el("div", { class: "table-empty" }, [tab.fetchError])]);
+  }
+  if (tab.result) {
+    const rows = tab.result.flatMap((n) => renderGnmiNode(store, pane, tab, n, "", 0));
+    return el("div", { class: "table-scroll" }, [el("div", { class: "gnmi-tree" }, rows)]);
+  }
+  if (tab.capabilities) {
+    return el("div", { class: "table-scroll" }, [renderGnmiCapabilities(tab.capabilities)]);
+  }
+  return el("div", { class: "table-scroll" }, [
+    el("div", { class: "table-empty" }, ["Enter a target and path, then click Get - or click Capabilities to see what the target supports."]),
+  ]);
+}
+
+function renderYangTreeRow(store: Store, node: YangNode, depth: number): HTMLElement[] {
+  const expandKey = `yang:${node.id}`;
+  const hasChildren = node.children.length > 0;
+  const expanded = !!store.state.expanded[expandKey];
+  const selected = node.id === store.state.selectedYangNodeId;
+  const textColor = selected ? "var(--tree-selected-text)" : "var(--tree-item-text)";
+  const bg = selected ? "var(--accent-selected-bg)" : "transparent";
+  const row = el(
+    "div",
+    {
+      class: "tree-row",
+      title: node.path || `${node.label} could not be resolved`,
+      style: { paddingLeft: depth * 16 + 2 + "px", opacity: node.resolved ? "1" : "0.45" },
+      onclick: () => store.selectYangNode(node),
+      ondblclick: () => store.openYangNodeInNewTab(node),
+    },
+    [
+      el("div", { class: "tree-row-bg", style: { background: bg } }, [
+        el(
+          "div",
+          {
+            class: "tree-caret",
+            style: { visibility: hasChildren ? "visible" : "hidden", transform: `rotate(${hasChildren && expanded ? 90 : 0}deg)` },
+            onclick: hasChildren
+              ? (e: MouseEvent) => {
+                  e.stopPropagation();
+                  store.toggleExpand(expandKey);
+                }
+              : undefined,
+          },
+          ["▶"],
+        ),
+        nodeIcon(node),
+        el("div", { class: "tree-label", style: { color: textColor, fontWeight: selected ? "600" : "400" } }, [node.label]),
+        copyButton("tree-copy-btn", node.path || node.label, `Copy ${node.path ? "path" : "name"}`),
+      ]),
+    ],
+  );
+  const out: HTMLElement[] = [row];
+  if (hasChildren && expanded) {
+    for (const child of node.children) out.push(...renderYangTreeRow(store, child, depth + 1));
+  }
+  return out;
+}
+
+/** The YANG directories/profile UI plus the schema tree, shown in the left sidebar below the MIB
+ * section - the gNMI counterpart to the MIB directory list and OID tree above it. Clicking a node
+ * stages its path into whichever gNMI tab is currently active (see `Store.selectYangNode`). */
+function renderYangSection(store: Store): HTMLElement[] {
+  const activeProfile = store.activeYangProfile();
+  const errors = store.state.yangParseErrors;
+  const dirRows: HTMLElement[] = (activeProfile?.dirs ?? []).map((dir) =>
+    el("div", { class: "mib-dir-row" }, [
+      el("div", { class: "mib-dir-caret", style: { visibility: "hidden" } }, ["▶"]),
+      el("div", { class: "mib-dir-icon" }),
+      el("div", { class: "mib-dir-path", title: dir }, [dir]),
+      el("button", { class: "mib-dir-remove", title: "Remove directory", onclick: () => void store.removeYangDir(dir) }, ["×"]),
+    ]),
+  );
+  if (errors.length) {
+    const issueCount = errors.reduce((n, fe) => n + fe.errors.length, 0);
+    dirRows.push(
+      el(
+        "button",
+        { class: "mib-dir-warning", onclick: () => store.toggleYangParseErrors() },
+        [`⚠ ${issueCount} issue${issueCount === 1 ? "" : "s"} while parsing`],
+      ),
+    );
+  }
+
+  const draft = store.state.yangDirDraft;
+  const draftRow =
+    draft === null
+      ? null
+      : el("div", { class: "mib-dir-draft-row" }, [
+          el("input", {
+            class: "mib-dir-draft-input yang-dir-draft-input",
+            placeholder: "/absolute/path/to/yang",
+            value: draft,
+            "data-focus-key": "yangDirDraft",
+            oninput: (e: Event) => store.updateYangDirDraft((e.target as HTMLInputElement).value),
+            onkeydown: (e: KeyboardEvent) => {
+              if (e.key === "Enter") void store.submitYangDirDraft();
+              else if (e.key === "Escape") store.cancelYangDirDraft();
+            },
+          }),
+          el("button", { class: "mib-dir-draft-confirm", title: "Add", onclick: () => void store.submitYangDirDraft() }, ["✓"]),
+          el("button", { class: "mib-dir-draft-cancel", title: "Cancel", onclick: () => store.cancelYangDirDraft() }, ["×"]),
+        ]);
+
+  const profiles = store.state.yangProfiles;
+  const canDeleteProfile = profiles.length > 1;
+  const profileRow = el("div", { class: "mib-profile-row" }, [
+    el(
+      "select",
+      {
+        class: "mib-profile-select",
+        value: store.state.activeYangProfileId,
+        onchange: (e: Event) => void store.switchYangProfile((e.target as HTMLSelectElement).value),
+      },
+      profiles.map((p) => el("option", { value: p.id }, [p.name])),
+    ),
+    el(
+      "button",
+      {
+        class: "mib-profile-btn",
+        title: "Rename profile",
+        onclick: () => {
+          store.startRenamingYangProfile();
+          document.querySelector<HTMLInputElement>(".yang-profile-rename-input")?.select();
+        },
+      },
+      ["✎"],
+    ),
+    canDeleteProfile
+      ? el(
+          "button",
+          {
+            class: "mib-profile-btn",
+            title: "Delete profile",
+            onclick: () => void store.removeYangProfile(store.state.activeYangProfileId),
+          },
+          ["×"],
+        )
+      : null,
+    el(
+      "button",
+      {
+        class: "mib-profile-btn",
+        title: "New profile",
+        onclick: () => {
+          store.startYangProfileDraft();
+          document.querySelector<HTMLInputElement>(".yang-profile-draft-input")?.focus();
+        },
+      },
+      ["+"],
+    ),
+  ]);
+
+  const renameRow = store.state.renamingYangProfile
+    ? el("div", { class: "mib-dir-draft-row" }, [
+        el("input", {
+          class: "mib-dir-draft-input yang-profile-rename-input",
+          value: activeProfile?.name ?? "",
+          "data-focus-key": "yangProfileRename",
+          onkeydown: (e: KeyboardEvent) => {
+            if (e.key === "Enter") void store.renameYangProfile(store.state.activeYangProfileId, (e.target as HTMLInputElement).value);
+            else if (e.key === "Escape") store.cancelRenamingYangProfile();
+          },
+        }),
+        el(
+          "button",
+          {
+            class: "mib-dir-draft-confirm",
+            title: "Save",
+            onclick: () => {
+              const input = document.querySelector<HTMLInputElement>(".yang-profile-rename-input");
+              void store.renameYangProfile(store.state.activeYangProfileId, input?.value ?? "");
+            },
+          },
+          ["✓"],
+        ),
+        el("button", { class: "mib-dir-draft-cancel", title: "Cancel", onclick: () => store.cancelRenamingYangProfile() }, ["×"]),
+      ])
+    : null;
+
+  const profileDraft = store.state.yangProfileDraft;
+  const profileDraftRow =
+    profileDraft === null
+      ? null
+      : el("div", { class: "mib-dir-draft-row" }, [
+          el("input", {
+            class: "mib-dir-draft-input yang-profile-draft-input",
+            placeholder: "Profile name",
+            value: profileDraft,
+            "data-focus-key": "yangProfileDraft",
+            oninput: (e: Event) => store.updateYangProfileDraft((e.target as HTMLInputElement).value),
+            onkeydown: (e: KeyboardEvent) => {
+              if (e.key === "Enter") void store.submitYangProfileDraft();
+              else if (e.key === "Escape") store.cancelYangProfileDraft();
+            },
+          }),
+          el("button", { class: "mib-dir-draft-confirm", title: "Create", onclick: () => void store.submitYangProfileDraft() }, ["✓"]),
+          el("button", { class: "mib-dir-draft-cancel", title: "Cancel", onclick: () => store.cancelYangProfileDraft() }, ["×"]),
+        ]);
+
+  const treeRows = store.yangTree.flatMap((n) => renderYangTreeRow(store, n, 0));
+
+  return [
+    el("div", { class: "sidebar-section-head" }, ["YANG (gNMI)"]),
+    el("div", { class: "mib-dirs" }, [
+      profileRow,
+      renameRow,
+      profileDraftRow,
+      el("div", { class: "mib-dirs-head" }, [
+        el("div", { class: "mib-dirs-title" }, ["YANG Directories"]),
+        el(
+          "button",
+          {
+            class: "mib-dir-add",
+            title: "Add YANG directory",
+            onclick: () => {
+              void store.addYangDir();
+              document.querySelector<HTMLInputElement>(".yang-dir-draft-input")?.focus();
+            },
+          },
+          ["+"],
+        ),
+      ]),
+      el("div", { class: "mib-dir-list" }, dirRows),
+      draftRow,
+    ]),
+    el(
+      "div",
+      { class: "tree", "data-preserve-scroll": "yangTree" },
+      treeRows.length ? treeRows : [el("div", { class: "table-empty" }, ["No YANG files found - add a directory above."])],
+    ),
+  ];
+}
+
+function renderGnmiPane(store: Store, pane: PaneState, tab: GnmiTabState): HTMLElement[] {
+  return [renderGnmiToolbar(store, pane, tab), renderGnmiBody(store, pane, tab)];
+}
+
 function renderPaneGroup(store: Store): HTMLElement {
   const panes = store.state.panes;
   const children: HTMLElement[] = [];
@@ -1671,7 +2150,12 @@ export function renderApp(store: Store): HTMLElement {
   const appBody = el("div", { class: "app-body" }, bodyChildren);
 
   const overlays: HTMLElement[] = [];
-  if (store.state.parseErrorsOpen && store.state.parseErrors.length > 0) overlays.push(renderParseErrorsModal(store));
+  if (store.state.parseErrorsOpen && store.state.parseErrors.length > 0) {
+    overlays.push(renderParseErrorsModal("Parse issues", store.state.parseErrors, () => store.toggleParseErrors()));
+  }
+  if (store.state.yangParseErrorsOpen && store.state.yangParseErrors.length > 0) {
+    overlays.push(renderParseErrorsModal("YANG parse issues", store.state.yangParseErrors, () => store.toggleYangParseErrors()));
+  }
   const contextMenu = renderTreeContextMenu(store);
   if (contextMenu) overlays.push(contextMenu);
   const refreshMenu = renderRefreshMenu(store);
