@@ -154,8 +154,24 @@ pub(crate) fn push_error(errors: &mut Vec<FileErrors>, file: &str, msg: String) 
     }
 }
 
-/// Recursively collects every file under `dir` (including subdirectories),
-/// reporting any directory that can't be read as a parse error.
+/// Recursively collects regular files beneath a directory while avoiding revisiting canonical paths.
+///
+/// Directory canonicalization and read failures are recorded in `errors`. Symlink cycles and
+/// previously visited directories are skipped.
+///
+/// # Examples
+///
+/// This is a crate-private helper (also used by `yang.rs`), so the example below is
+/// illustrative only (not run as a doctest, since it's unreachable from an external crate):
+///
+/// ```ignore
+/// use std::collections::HashSet;
+///
+/// let mut files = Vec::new();
+/// let mut errors = Vec::new();
+/// let mut visited = HashSet::new();
+/// collect_files(std::path::Path::new("./mibs"), &mut files, &mut errors, &mut visited);
+/// ```
 pub(crate) fn collect_files(
     dir: &std::path::Path,
     out: &mut Vec<std::path::PathBuf>,
@@ -190,6 +206,18 @@ pub(crate) fn collect_files(
     }
 }
 
+/// Parses MIB files from the specified directories and builds their resolved data models.
+///
+/// Unresolved OIDs, syntax errors, and file-system errors are reported in the returned result.
+///
+/// # Examples
+///
+/// ```
+/// use snmp_mib_client_lib::mib::parse_directories;
+///
+/// let result = parse_directories(&[]);
+/// assert!(result.errors.is_empty());
+/// ```
 pub fn parse_directories(dirs: &[String]) -> ParseResult {
     let mut parser = Parser::new();
     if parser.set_language(&tree_sitter_asn1::LANGUAGE.into()).is_err() {
