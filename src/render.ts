@@ -1,5 +1,6 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { el, startDrag, svgIcon } from "./dom";
+import { exportTableCsv, exportTablePng } from "./export";
 import { DEFAULT_COL_WIDTH } from "./mockData";
 import { computeStats, type Store } from "./state";
 import type {
@@ -35,6 +36,11 @@ function sidebarToggleIcon(): SVGSVGElement {
 /** Standard "chevron down" icon, used for the fetch-mode dropdown trigger. */
 function chevronDownIcon(): SVGSVGElement {
   return svgIcon('<path d="M6 9l6 6 6-6"/>');
+}
+
+/** Download-tray icon, used for the "export table" buttons. */
+function downloadIcon(): SVGSVGElement {
+  return svgIcon('<path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M4 21h16"/>');
 }
 
 /** Broadcast-tower icon, used for the "new trap listener tab" action. */
@@ -828,7 +834,64 @@ function renderTableToolbar(store: Store, pane: PaneState, tab: TabState): HTMLE
       [el("div", { class: "toggle-track" + (tab.transposed ? " on" : "") }, [el("div", { class: "toggle-knob" })]), "Transpose"],
     ),
   );
+  const canExport = tab.columns.length > 0;
+  children.push(
+    el(
+      "button",
+      {
+        class: "export-btn",
+        disabled: !canExport,
+        title: "Export the table",
+        onclick: (e: MouseEvent) => {
+          const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+          store.toggleExportMenu(pane.id, rect.left, rect.bottom + 4);
+        },
+      },
+      [downloadIcon(), "Export", chevronDownIcon()],
+    ),
+  );
   return el("div", { class: "table-toolbar" }, children);
+}
+
+/** Runs a table export, surfacing any failure (e.g. a disk write error) with a native alert - the app has no toast/notification system for an error path this rare. */
+function runTableExport(store: Store, tab: TabState, labelHint: string, fn: (store: Store, tab: TabState, labelHint: string) => Promise<void>) {
+  void fn(store, tab, labelHint).catch((e) => alert("Export failed: " + (e instanceof Error ? e.message : String(e))));
+}
+
+/** Format picker opened by the table toolbar's "Export" button. */
+function renderExportMenu(store: Store): HTMLElement | null {
+  const menu = store.state.exportMenu;
+  if (!menu) return null;
+  const pane = store.getPane(menu.paneId);
+  const tab = pane && store.getPaneActiveTab(pane);
+  if (!pane || !tab || tab.kind !== "query" || tab.columns.length === 0) return null;
+  const node = store.findNode(store.activeTree(), tab.selectedNode);
+  const labelHint = node ? node.label : tab.selectedNode;
+
+  const item = (label: string, fn: (store: Store, tab: TabState, labelHint: string) => Promise<void>) =>
+    el(
+      "button",
+      {
+        class: "context-menu-item",
+        onclick: () => {
+          runTableExport(store, tab, labelHint, fn);
+          store.closeExportMenu();
+        },
+      },
+      [label],
+    );
+
+  return el(
+    "div",
+    { class: "context-menu-overlay", onclick: () => store.closeExportMenu(), oncontextmenu: (e: Event) => e.preventDefault() },
+    [
+      el(
+        "div",
+        { class: "context-menu", style: { left: menu.x + "px", top: menu.y + "px" }, onclick: (e: Event) => e.stopPropagation() },
+        [item("Export as CSV", exportTableCsv), item("Export as PNG", exportTablePng)],
+      ),
+    ],
+  );
 }
 
 /** A couple of literal values read like a status enum regardless of which MIB table they came from. */
@@ -858,7 +921,7 @@ function capitalizeWord(word: string): string {
  * every multi-word column (typically the table name, e.g. "dcpLinkview") is stripped, then
  * the remaining words are title-cased, e.g. "dcpLinkviewLocalHostname" -> "Local Hostname".
  */
-function humanizeColumnNames(cols: string[]): Record<string, string> {
+export function humanizeColumnNames(cols: string[]): Record<string, string> {
   const wordLists = cols.map(splitIdentifierWords);
   const multiWordLists = wordLists.filter((w) => w.length > 1);
 
@@ -934,6 +997,19 @@ function applyDisplayHint(raw: string, hint: string): string | null {
 }
 
 /**
+ * Resolves a raw cell value to what should actually be shown: an enumerated column's named
+ * value takes precedence over a numeric DISPLAY-HINT - in practice a column only ever has one
+ * or the other, never both. `hinted` is true when `value` differs from `raw` (i.e. it needed
+ * some translation), which callers use to decide whether to also surface the raw value.
+ */
+export function resolveCellValue(raw: string, displayHint?: string, enumLabels?: Record<string, string>): { value: string; hinted: boolean } {
+  const hinted =
+    (enumLabels && Object.prototype.hasOwnProperty.call(enumLabels, raw) ? enumLabels[raw] : null) ??
+    (displayHint ? applyDisplayHint(raw, displayHint) : null);
+  return { value: hinted ?? raw, hinted: hinted !== null && hinted !== raw };
+}
+
+/**
  * `rowStatus` is only passed in transposed mode, where a fetched row becomes a column and its
  * added/removed styling (normally set once on the `<tr>`) has to be repeated on every cell in that column.
  */
@@ -949,13 +1025,8 @@ function renderCell(
   const opacity = rowStatus === "removed" ? "0.55" : "1";
   const textDecoration = rowStatus === "removed" ? "line-through" : "none";
   const raw = row[colKey] ?? "";
-  // An enumerated column's named value takes precedence over a numeric DISPLAY-HINT -
-  // in practice a column only ever has one or the other, never both.
-  const hinted =
-    (enumLabels && Object.prototype.hasOwnProperty.call(enumLabels, raw) ? enumLabels[raw] : null) ??
-    (displayHint ? applyDisplayHint(raw, displayHint) : null);
-  const value = hinted ?? raw;
-  const title = hinted !== null && hinted !== raw ? `raw: ${raw}` : undefined;
+  const { value, hinted } = resolveCellValue(raw, displayHint, enumLabels);
+  const title = hinted ? `raw: ${raw}` : undefined;
   const color = statusColor(value);
   if (color) {
     return el("td", { style: { background: bg, opacity, textDecoration }, title }, [
@@ -2089,6 +2160,8 @@ export function renderApp(store: Store): HTMLElement {
   if (contextMenu) overlays.push(contextMenu);
   const refreshMenu = renderRefreshMenu(store);
   if (refreshMenu) overlays.push(refreshMenu);
+  const exportMenu = renderExportMenu(store);
+  if (exportMenu) overlays.push(exportMenu);
   const themeMenu = renderThemeMenu(store);
   if (themeMenu) overlays.push(themeMenu);
   if (overlays.length === 0) return appBody;

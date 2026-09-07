@@ -45,6 +45,8 @@ const DEFAULT_GNMI_PORT = "57400";
 const DEFAULT_GNMI_USERNAME = "admin";
 const DEFAULT_GNMI_PASSWORD = "admin";
 const TRAP_POLL_INTERVAL_MS = 1000;
+/** How often to re-check for a new release - the app is commonly left open for a long time, so a startup-only check would miss releases that come out mid-session. */
+const UPDATE_CHECK_INTERVAL_MS = 60 * 60 * 1000;
 /** Client-side mirror of the server's per-listener ring buffer cap (see `trap.rs::MAX_EVENTS`), so a long-idle tab's array doesn't grow unbounded. */
 const MAX_CLIENT_TRAP_EVENTS = 2000;
 const THEME_STORAGE_KEY = "snmpBrowserTheme";
@@ -194,6 +196,7 @@ export class Store {
       activePaneId: "p1",
       treeContextMenu: null,
       refreshMenu: null,
+      exportMenu: null,
       theme: loadTheme(),
       themeMenu: null,
       updateInfo: null,
@@ -212,10 +215,13 @@ export class Store {
     this.applyYangProfilesResponse(yangProfiles);
     this.notify();
     await Promise.all([this.loadMibTree(), this.loadYangTree()]);
-    if (isTauri) void this.runUpdateCheck();
+    if (isTauri) {
+      void this.runUpdateCheck();
+      setInterval(() => void this.runUpdateCheck(), UPDATE_CHECK_INTERVAL_MS);
+    }
   }
 
-  /** Fire-and-forget update check, run once on startup - see `checkForUpdate()` in update.ts for what "newer" means and how failures are handled. */
+  /** Fire-and-forget update check, run on startup and then every `UPDATE_CHECK_INTERVAL_MS` - see `checkForUpdate()` in update.ts for what "newer" means and how failures are handled. */
   private async runUpdateCheck() {
     const info = await checkForUpdate();
     if (!info) return;
@@ -656,6 +662,16 @@ export class Store {
 
   closeRefreshMenu() {
     this.state.refreshMenu = null;
+    this.notify();
+  }
+
+  toggleExportMenu(paneId: string, x: number, y: number) {
+    this.state.exportMenu = this.state.exportMenu?.paneId === paneId ? null : { paneId, x, y };
+    this.notify();
+  }
+
+  closeExportMenu() {
+    this.state.exportMenu = null;
     this.notify();
   }
 
