@@ -647,7 +647,13 @@ export class Store {
   }
 
   openTreeContextMenu(x: number, y: number, nodeId: string) {
-    this.state.treeContextMenu = { x, y, nodeId };
+    this.state.treeContextMenu = { x, y, nodeId, kind: "mib" };
+    this.notify();
+  }
+
+  /** The YANG-tree counterpart to `openTreeContextMenu`. */
+  openYangTreeContextMenu(x: number, y: number, nodeId: string) {
+    this.state.treeContextMenu = { x, y, nodeId, kind: "yang" };
     this.notify();
   }
 
@@ -831,6 +837,7 @@ export class Store {
     const tab = this.makeGnmiTab("tab" + Date.now(), { path: node.path });
     pane.tabs.push(tab);
     pane.activeTabId = tab.id;
+    this.closeTreeContextMenu();
     this.notify();
   }
 
@@ -982,6 +989,16 @@ export class Store {
         const f = this.findNode(n.children, id);
         if (f) return f;
       }
+    }
+    return null;
+  }
+
+  /** The YANG-tree counterpart to `findNode`. */
+  findYangNode(nodes: YangNode[], id: string): YangNode | null {
+    for (const n of nodes) {
+      if (n.id === id) return n;
+      const f = this.findYangNode(n.children, id);
+      if (f) return f;
     }
     return null;
   }

@@ -476,10 +476,8 @@ function renderParseErrorsModal(title: string, errors: FileErrors[], onClose: ()
   ]);
 }
 
-function renderTreeContextMenu(store: Store): HTMLElement | null {
-  const menu = store.state.treeContextMenu;
-  if (!menu) return null;
-  const node = store.findNode(store.activeTree(), menu.nodeId);
+function mibTreeContextMenuItems(store: Store, nodeId: string): HTMLElement[] {
+  const node = store.findNode(store.activeTree(), nodeId);
 
   const items: HTMLElement[] = [];
   if (node) {
@@ -499,18 +497,58 @@ function renderTreeContextMenu(store: Store): HTMLElement | null {
   }
   if (node && node.type !== "group") {
     items.push(
-      el("button", { class: "context-menu-item", onclick: () => store.openNodeInNewTab(menu.nodeId) }, [
+      el("button", { class: "context-menu-item", onclick: () => store.openNodeInNewTab(nodeId) }, [
         `Open "${node.label}" in new tab`,
       ]),
     );
   }
   if (store.canBenchmark(node)) {
     items.push(
-      el("button", { class: "context-menu-item", onclick: () => store.openBenchmarkTab(menu.nodeId) }, [
-        `Benchmark "${node?.label ?? menu.nodeId}" walk`,
+      el("button", { class: "context-menu-item", onclick: () => store.openBenchmarkTab(nodeId) }, [
+        `Benchmark "${node?.label ?? nodeId}" walk`,
       ]),
     );
   }
+  return items;
+}
+
+/** The YANG-tree counterpart to `mibTreeContextMenuItems`. No benchmark item - walk timing is
+ * SNMP-only (see `snmp::walk_timed`); gNMI has no equivalent yet. */
+function yangTreeContextMenuItems(store: Store, nodeId: string): HTMLElement[] {
+  const node = store.findYangNode(store.yangTree, nodeId);
+
+  const items: HTMLElement[] = [];
+  if (node) {
+    const copyText = node.path || node.label;
+    items.push(
+      el(
+        "button",
+        {
+          class: "context-menu-item",
+          onclick: () => {
+            void navigator.clipboard.writeText(copyText);
+            store.closeTreeContextMenu();
+          },
+        },
+        [`Copy ${node.path ? "path" : "name"} "${copyText}"`],
+      ),
+    );
+  }
+  if (node && node.path) {
+    items.push(
+      el("button", { class: "context-menu-item", onclick: () => store.openYangNodeInNewTab(node) }, [
+        `Open "${node.label}" in new tab`,
+      ]),
+    );
+  }
+  return items;
+}
+
+function renderTreeContextMenu(store: Store): HTMLElement | null {
+  const menu = store.state.treeContextMenu;
+  if (!menu) return null;
+
+  const items: HTMLElement[] = menu.kind === "yang" ? yangTreeContextMenuItems(store, menu.nodeId) : mibTreeContextMenuItems(store, menu.nodeId);
   if (items.length === 0) return null;
 
   return el(
@@ -1930,6 +1968,10 @@ function renderYangTreeRow(store: Store, node: YangNode, depth: number): HTMLEle
       style: { paddingLeft: depth * 16 + 2 + "px", opacity: node.resolved ? "1" : "0.45" },
       onclick: () => store.selectYangNode(node),
       ondblclick: () => store.openYangNodeInNewTab(node),
+      oncontextmenu: (e: MouseEvent) => {
+        e.preventDefault();
+        store.openYangTreeContextMenu(e.clientX, e.clientY, node.id);
+      },
     },
     [
       el("div", { class: "tree-row-bg", style: { background: bg } }, [
@@ -1966,14 +2008,41 @@ function renderYangTreeRow(store: Store, node: YangNode, depth: number): HTMLEle
 function renderYangSection(store: Store): HTMLElement[] {
   const activeProfile = store.activeYangProfile();
   const errors = store.state.yangParseErrors;
-  const dirRows: HTMLElement[] = (activeProfile?.dirs ?? []).map((dir) =>
-    el("div", { class: "mib-dir-row" }, [
-      el("div", { class: "mib-dir-caret", style: { visibility: "hidden" } }, ["▶"]),
+  const dirRows: HTMLElement[] = (activeProfile?.dirs ?? []).flatMap((dir) => {
+    const files = store.yangDirFiles.find((d) => d.dir === dir)?.files ?? [];
+    const expandKey = `yangdir:${dir}`;
+    const expanded = files.length > 0 && !!store.state.expanded[expandKey];
+
+    const row = el("div", { class: "mib-dir-row" }, [
+      el(
+        "div",
+        {
+          class: "mib-dir-caret",
+          style: { visibility: files.length ? "visible" : "hidden", transform: `rotate(${expanded ? 90 : 0}deg)` },
+          onclick: files.length ? () => store.toggleExpand(expandKey) : undefined,
+        },
+        ["▶"],
+      ),
       el("div", { class: "mib-dir-icon" }),
       el("div", { class: "mib-dir-path", title: dir }, [dir]),
       el("button", { class: "mib-dir-remove", title: "Remove directory", onclick: () => void store.removeYangDir(dir) }, ["×"]),
-    ]),
-  );
+    ]);
+
+    if (!expanded) return [row];
+
+    const fileRows = files.map((file) => {
+      const fileErrors = errors.find((fe) => fe.file === file)?.errors;
+      const hasIssue = !!fileErrors?.length;
+      const relativePath = file.startsWith(dir) ? file.slice(dir.length).replace(/^[/\\]/, "") : file;
+      const title = hasIssue ? `${file}\n\n${fileErrors!.join("\n")}` : file;
+      return el("div", { class: "mib-file-row", title }, [
+        el("div", { class: "mib-file-icon" + (hasIssue ? " mib-file-icon-issue" : "") }),
+        el("div", { class: "mib-file-name" + (hasIssue ? " mib-file-name-issue" : "") }, [relativePath]),
+      ]);
+    });
+
+    return [row, ...fileRows];
+  });
   if (errors.length) {
     const issueCount = errors.reduce((n, fe) => n + fe.errors.length, 0);
     dirRows.push(

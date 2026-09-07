@@ -5,7 +5,7 @@
 //! with CORS enabled so a Vite dev server on a different port can call it.
 
 use serde_json::{json, Value};
-use snmp_mib_client_lib::{gnmi, mib, settings, snmp, trap};
+use snmp_mib_client_lib::{gnmi, mib, settings, snmp, trap, yang};
 use std::io::Read;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -63,6 +63,10 @@ fn json_response(status: u16, body: &Value, origin: Option<&str>) -> Response<st
 
 fn profiles_response(settings: &settings::Settings) -> Value {
     json!({ "profiles": settings.mib_profiles, "activeProfileId": settings.active_mib_profile_id })
+}
+
+fn yang_profiles_response(settings: &settings::Settings) -> Value {
+    json!({ "profiles": settings.yang_profiles, "activeProfileId": settings.active_yang_profile_id })
 }
 
 /// Mirrors the command dispatch in `lib.rs`'s `invoke_handler!`, minus the
@@ -145,6 +149,88 @@ fn handle(state: &AppState, rt: &tokio::runtime::Runtime, cmd: &str, args: &Valu
             };
             state.save();
             Ok(resp)
+        }
+
+        "list_yang_profiles" => Ok(yang_profiles_response(&state.settings.lock().unwrap())),
+
+        "add_yang_profile" => {
+            let name = args.get("name").and_then(Value::as_str).ok_or((400, "missing 'name'".to_string()))?.to_string();
+            let resp = {
+                let mut s = state.settings.lock().unwrap();
+                s.add_yang_profile(name);
+                yang_profiles_response(&s)
+            };
+            state.save();
+            Ok(resp)
+        }
+
+        "remove_yang_profile" => {
+            let id = args.get("id").and_then(Value::as_str).ok_or((400, "missing 'id'".to_string()))?.to_string();
+            let resp = {
+                let mut s = state.settings.lock().unwrap();
+                s.remove_yang_profile(&id);
+                yang_profiles_response(&s)
+            };
+            state.save();
+            Ok(resp)
+        }
+
+        "rename_yang_profile" => {
+            let id = args.get("id").and_then(Value::as_str).ok_or((400, "missing 'id'".to_string()))?.to_string();
+            let name = args.get("name").and_then(Value::as_str).ok_or((400, "missing 'name'".to_string()))?.to_string();
+            let resp = {
+                let mut s = state.settings.lock().unwrap();
+                s.rename_yang_profile(&id, name);
+                yang_profiles_response(&s)
+            };
+            state.save();
+            Ok(resp)
+        }
+
+        "set_active_yang_profile" => {
+            let id = args.get("id").and_then(Value::as_str).ok_or((400, "missing 'id'".to_string()))?.to_string();
+            let resp = {
+                let mut s = state.settings.lock().unwrap();
+                if s.yang_profiles.iter().any(|p| p.id == id) {
+                    s.active_yang_profile_id = id;
+                }
+                yang_profiles_response(&s)
+            };
+            state.save();
+            Ok(resp)
+        }
+
+        "add_yang_dir" => {
+            let path = args.get("path").and_then(Value::as_str).ok_or((400, "missing 'path'".to_string()))?.to_string();
+            let resp = {
+                let mut s = state.settings.lock().unwrap();
+                if let Some(p) = s.active_yang_profile_mut() {
+                    if !p.dirs.contains(&path) {
+                        p.dirs.push(path);
+                    }
+                }
+                yang_profiles_response(&s)
+            };
+            state.save();
+            Ok(resp)
+        }
+
+        "remove_yang_dir" => {
+            let path = args.get("path").and_then(Value::as_str).ok_or((400, "missing 'path'".to_string()))?.to_string();
+            let resp = {
+                let mut s = state.settings.lock().unwrap();
+                if let Some(p) = s.active_yang_profile_mut() {
+                    p.dirs.retain(|d| d != &path);
+                }
+                yang_profiles_response(&s)
+            };
+            state.save();
+            Ok(resp)
+        }
+
+        "get_yang_tree" => {
+            let dirs = state.settings.lock().unwrap().active_yang_profile().map(|p| p.dirs.clone()).unwrap_or_default();
+            Ok(serde_json::to_value(yang::parse_directories(&dirs)).unwrap())
         }
 
         "list_host_profiles" => Ok(json!(state.settings.lock().unwrap().host_profiles.clone())),
@@ -248,6 +334,13 @@ fn handle(state: &AppState, rt: &tokio::runtime::Runtime, cmd: &str, args: &Valu
             .map_err(|e| (400, e.to_string()))?;
             let path = args.get("path").and_then(Value::as_str).ok_or((400, "missing 'path'".to_string()))?.to_string();
             rt.block_on(gnmi::get(&connection, &path)).map(|r| serde_json::to_value(&r).unwrap()).map_err(|e| (400, e))
+        }
+
+        "write_export_file" => {
+            let path = args.get("path").and_then(Value::as_str).ok_or((400, "missing 'path'".to_string()))?.to_string();
+            let data: Vec<u8> = serde_json::from_value(args.get("data").cloned().ok_or((400, "missing 'data'".to_string()))?)
+                .map_err(|e| (400, e.to_string()))?;
+            std::fs::write(&path, data).map(|_| Value::Null).map_err(|e| (400, e.to_string()))
         }
 
         other => Err((404, format!("unknown command '{other}'"))),
