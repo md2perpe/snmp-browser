@@ -13,6 +13,7 @@
 //! auto-refreshing table tabs, so it works identically under Tauri and the standalone HTTP
 //! dev server (`bin/server.rs`), neither of which currently has a push/event channel.
 
+use crate::mib::ValueHintIndex;
 use crate::snmp::format_value;
 use serde::{Deserialize, Serialize};
 use snmp2::{v3, Error as SnmpError, MessageType, Pdu, Value, Version};
@@ -54,6 +55,12 @@ pub struct TrapVarbind {
     pub oid: String,
     pub name: String,
     pub value: String,
+    /// DISPLAY-HINT declared on this varbind's MIB type, if any - mirrors a table column's
+    /// `displayHints` entry, applied client-side only while "Display hint" is toggled on.
+    pub display_hint: Option<String>,
+    /// Enumerated-value labels keyed by the raw integer as a string (e.g. `"2"` -> `"ok"`),
+    /// mirrors a table column's `enumLabels` entry.
+    pub enum_labels: HashMap<String, String>,
 }
 
 #[derive(Serialize, Clone)]
@@ -129,6 +136,20 @@ fn resolve_oid(index: &[(String, String)], oid: &str) -> String {
     oid.to_string()
 }
 
+/// Longest-prefix-match `oid` against a `ValueHintIndex` (see `mib::build_value_hint_index`),
+/// the same walk `resolve_oid` does against the name index, returning that symbol's
+/// DISPLAY-HINT/enum labels or `None`/empty if `oid` isn't covered by one.
+fn resolve_value_hint(index: &ValueHintIndex, oid: &str) -> (Option<String>, HashMap<String, String>) {
+    for (base, hint, enum_values) in index {
+        let matches = oid == base || oid.strip_prefix(base.as_str()).is_some_and(|rest| rest.starts_with('.'));
+        if matches {
+            let enum_labels = enum_values.iter().map(|(v, name)| (v.to_string(), name.clone())).collect();
+            return (hint.clone(), enum_labels);
+        }
+    }
+    (None, HashMap::new())
+}
+
 fn now_ms() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
 }
@@ -148,7 +169,7 @@ fn error_event(seq: u64, src: SocketAddr, message: String) -> TrapEvent {
     }
 }
 
-fn event_from_pdu(pdu: Pdu, seq: u64, src: SocketAddr, oid_index: &[(String, String)]) -> TrapEvent {
+fn event_from_pdu(pdu: Pdu, seq: u64, src: SocketAddr, oid_index: &[(String, String)], value_hints: &ValueHintIndex) -> TrapEvent {
     let version = pdu.version().map(|v| v.to_string()).unwrap_or_else(|_| "unknown".to_string());
     let principal = String::from_utf8_lossy(pdu.community).into_owned();
 
@@ -167,7 +188,8 @@ fn event_from_pdu(pdu: Pdu, seq: u64, src: SocketAddr, oid_index: &[(String, Str
             .clone()
             .map(|(oid, val)| {
                 let oid_s = oid.to_id_string();
-                TrapVarbind { name: resolve_oid(oid_index, &oid_s), oid: oid_s, value: format_value(&val, &[]) }
+                let (display_hint, enum_labels) = resolve_value_hint(value_hints, &oid_s);
+                TrapVarbind { name: resolve_oid(oid_index, &oid_s), oid: oid_s, value: format_value(&val, &[]), display_hint, enum_labels }
             })
             .collect();
         return TrapEvent { seq, time_ms: now_ms(), source: src.to_string(), version, principal, trap_type, trap_oid, varbinds, confirmed: false, error: None };
@@ -184,7 +206,8 @@ fn event_from_pdu(pdu: Pdu, seq: u64, src: SocketAddr, oid_index: &[(String, Str
                     trap_oid = inner.to_id_string();
                 }
             }
-            TrapVarbind { name: resolve_oid(oid_index, &oid_s), oid: oid_s, value: format_value(&val, &[]) }
+            let (display_hint, enum_labels) = resolve_value_hint(value_hints, &oid_s);
+            TrapVarbind { name: resolve_oid(oid_index, &oid_s), oid: oid_s, value: format_value(&val, &[]), display_hint, enum_labels }
         })
         .collect();
     let trap_type = if trap_oid.is_empty() { "(no snmpTrapOID varbind)".to_string() } else { resolve_oid(oid_index, &trap_oid) };
@@ -208,6 +231,7 @@ fn decode(
     config: &TrapListenerConfig,
     security: &mut Option<v3::Security>,
     oid_index: &[(String, String)],
+    value_hints: &ValueHintIndex,
     seq_counter: &Mutex<u64>,
 ) -> Option<TrapEvent> {
     match config.version.as_str() {
@@ -220,7 +244,7 @@ fn decode(
             if !config.community.is_empty() && pdu.community != config.community.as_bytes() {
                 return None;
             }
-            Some(event_from_pdu(pdu, next_seq(seq_counter), src, oid_index))
+            Some(event_from_pdu(pdu, next_seq(seq_counter), src, oid_index, value_hints))
         }
         "v3" => {
             // `start` requires a v3 user before a v3-mode listener is allowed to run, so this
@@ -236,7 +260,7 @@ fn decode(
                 result = Pdu::from_bytes_with_security(bytes, Some(&mut *sec));
             }
             match result {
-                Ok(pdu) => Some(event_from_pdu(pdu, next_seq(seq_counter), src, oid_index)),
+                Ok(pdu) => Some(event_from_pdu(pdu, next_seq(seq_counter), src, oid_index, value_hints)),
                 // Unlike a version/community mismatch, this is the version the listener is
                 // configured for, but decoding still failed (bad credentials, corrupt packet,
                 // ...) - worth surfacing rather than silently dropping.
@@ -248,7 +272,13 @@ fn decode(
 }
 
 impl TrapState {
-    pub fn start(&self, id: String, config: TrapListenerConfig, oid_index: Arc<Vec<(String, String)>>) -> Result<TrapListenerStatus, String> {
+    pub fn start(
+        &self,
+        id: String,
+        config: TrapListenerConfig,
+        oid_index: Arc<Vec<(String, String)>>,
+        value_hints: Arc<ValueHintIndex>,
+    ) -> Result<TrapListenerStatus, String> {
         let mut listeners = self.listeners.lock().unwrap();
         if listeners.contains_key(&id) {
             return Err("this tab's trap listener is already running".to_string());
@@ -276,7 +306,7 @@ impl TrapState {
             while !stop_bg.load(Ordering::Relaxed) {
                 match socket.recv_from(&mut buf) {
                     Ok((n, src)) => {
-                        let Some(event) = decode(&buf[..n], src, &config, &mut security, &oid_index, &next_seq_counter) else { continue };
+                        let Some(event) = decode(&buf[..n], src, &config, &mut security, &oid_index, &value_hints, &next_seq_counter) else { continue };
                         let mut q = events_bg.lock().unwrap();
                         q.push_back(event);
                         while q.len() > MAX_EVENTS {

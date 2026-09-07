@@ -1305,6 +1305,18 @@ function renderTrapToolbar(store: Store, pane: PaneState, tab: TrapTabState): HT
       "data-focus-key": `trap:${tab.id}:filter`,
       oninput: (e: Event) => store.setTrapFilter(pane.id, (e.target as HTMLInputElement).value),
     }),
+    el(
+      "label",
+      {
+        class: "toggle-label",
+        title: 'Show varbind values with a DISPLAY-HINT formatted (e.g. 123 -> 12.3) or an enumerated value named (e.g. 2 -> "ok") instead of raw',
+        onclick: () => store.toggleTrapUseDisplayHints(pane.id),
+      },
+      [
+        el("div", { class: "toggle-track" + (tab.useDisplayHints ? " on" : "") }, [el("div", { class: "toggle-knob" })]),
+        "Display hint",
+      ],
+    ),
     el("button", { class: "trap-clear-btn", onclick: () => void store.clearTraps(pane.id) }, ["Clear"]),
   ]);
 
@@ -1346,10 +1358,11 @@ function trapMatchesFilter(e: TrapEvent, filter: string): boolean {
   return e.varbinds.some((v) => v.name.toLowerCase().includes(needle) || v.oid.includes(needle) || v.value.toLowerCase().includes(needle));
 }
 
-function renderTrapVarbindRow(v: TrapVarbind): HTMLElement {
+function renderTrapVarbindRow(v: TrapVarbind, useDisplayHints: boolean): HTMLElement {
+  const { value, hinted } = useDisplayHints ? resolveCellValue(v.value, v.displayHint, v.enumLabels) : { value: v.value, hinted: false };
   return el("div", { class: "trap-varbind-row" }, [
     el("span", { class: "trap-varbind-name", title: v.oid }, [v.name]),
-    el("span", { class: "trap-varbind-value" }, [v.value || "(empty)"]),
+    el("span", { class: "trap-varbind-value", title: hinted ? `raw: ${v.value}` : undefined }, [value || "(empty)"]),
   ]);
 }
 
@@ -1396,7 +1409,7 @@ function renderTrapRow(store: Store, pane: PaneState, tab: TrapTabState, e: Trap
         el("td", { colspan: 5 }, [
           el("div", { class: "trap-varbinds" }, [
             el("div", { class: "trap-varbind-header" }, [`Trap OID: ${e.trapOid || "(none)"}`]),
-            ...e.varbinds.map(renderTrapVarbindRow),
+            ...e.varbinds.map((v) => renderTrapVarbindRow(v, tab.useDisplayHints)),
           ]),
         ]),
       ]),

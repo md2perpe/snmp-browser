@@ -322,6 +322,7 @@ export class Store {
       lastSeq: 0,
       expandedSeq: null,
       filterText: "",
+      useDisplayHints: false,
       ...opts,
     };
   }
@@ -1337,6 +1338,10 @@ export class Store {
 
   setTrapFilter(paneId: string, text: string) {
     this.updateActiveTrapTabInPane(paneId, { filterText: text });
+  }
+
+  toggleTrapUseDisplayHints(paneId: string) {
+    this.updateActiveTrapTabInPane(paneId, (t) => ({ useDisplayHints: !t.useDisplayHints }));
   }
 
   // ---------- gNMI tab ----------
