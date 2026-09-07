@@ -321,8 +321,8 @@ export interface AppState {
   leftCollapsed: boolean;
   panes: PaneState[];
   activePaneId: string;
-  /** Right-click context menu on a tree node; null when closed. */
-  treeContextMenu: { x: number; y: number; nodeId: string } | null;
+  /** Right-click context menu on a tree node (MIB or YANG); null when closed. */
+  treeContextMenu: { x: number; y: number; nodeId: string; kind: "mib" | "yang" } | null;
   /** Fetch mode dropdown (manual vs. auto-refresh) for a pane's split button; null when closed. */
   refreshMenu: { paneId: string; x: number; y: number } | null;
   /** Export-format dropdown (CSV vs. PNG) for a pane's export button; null when closed. */
