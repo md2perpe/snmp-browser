@@ -146,7 +146,7 @@ struct RawSymbol {
     file: String,
 }
 
-fn push_error(errors: &mut Vec<FileErrors>, file: &str, msg: String) {
+pub(crate) fn push_error(errors: &mut Vec<FileErrors>, file: &str, msg: String) {
     if let Some(entry) = errors.iter_mut().find(|e| e.file == file) {
         entry.errors.push(msg);
     } else {
@@ -156,7 +156,7 @@ fn push_error(errors: &mut Vec<FileErrors>, file: &str, msg: String) {
 
 /// Recursively collects every file under `dir` (including subdirectories),
 /// reporting any directory that can't be read as a parse error.
-fn collect_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>, errors: &mut Vec<FileErrors>) {
+pub(crate) fn collect_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>, errors: &mut Vec<FileErrors>) {
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
         Err(e) => {
@@ -241,11 +241,11 @@ pub fn parse_directories(dirs: &[String]) -> ParseResult {
     ParseResult { tree, tables_tree, tables, symbols, errors, dir_files }
 }
 
-fn node_text<'a>(node: Node, src: &'a [u8]) -> &'a str {
+pub(crate) fn node_text<'a>(node: Node, src: &'a [u8]) -> &'a str {
     node.utf8_text(src).unwrap_or("")
 }
 
-fn find_child_by_kind<'a>(node: Node<'a>, kind: &str) -> Option<Node<'a>> {
+pub(crate) fn find_child_by_kind<'a>(node: Node<'a>, kind: &str) -> Option<Node<'a>> {
     let mut cursor = node.walk();
     let found = node.named_children(&mut cursor).find(|c| c.kind() == kind);
     found
