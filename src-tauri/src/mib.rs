@@ -746,6 +746,24 @@ END
         assert!(if_table.resolved);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn directory_cycles_via_symlinks_do_not_recurse_forever() {
+        let dir = tempfile::tempdir().unwrap();
+        let sub = dir.path().join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        std::fs::write(sub.join("TEST.mib"), IF_TABLE_MIB).unwrap();
+        // A symlink back to the root turns the tree into a cycle; without
+        // tracking visited directories this would recurse until the stack
+        // overflows.
+        std::os::unix::fs::symlink(dir.path(), sub.join("loop")).unwrap();
+
+        let result = parse_directories(&[dir.path().to_string_lossy().to_string()]);
+
+        let if_table = result.symbols.get("ifTable").expect("ifTable symbol should still be found once");
+        assert!(if_table.resolved);
+    }
+
     #[test]
     fn resolves_absolute_oids_across_the_ancestor_chain() {
         let dir = write_fixture(IF_TABLE_MIB);
