@@ -206,7 +206,8 @@ fn handle(state: &AppState, rt: &tokio::runtime::Runtime, cmd: &str, args: &Valu
                 *cache = Some(mib::parse_directories(&dirs));
             }
             let oid_index = Arc::new(mib::build_oid_index(&cache.as_ref().unwrap().tree));
-            state.trap_state.start(id, config, oid_index).map(|r| serde_json::to_value(&r).unwrap()).map_err(|e| (400, e))
+            let value_hints = Arc::new(cache.as_ref().unwrap().value_hints.clone());
+            state.trap_state.start(id, config, oid_index, value_hints).map(|r| serde_json::to_value(&r).unwrap()).map_err(|e| (400, e))
         }
 
         "stop_trap_listener" => {
