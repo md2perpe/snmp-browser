@@ -255,7 +255,7 @@ fn main() {
             reader.read_to_string(&mut body).is_err() || body.len() as u64 > MAX_REQUEST_BODY_BYTES
         };
         if body_too_large {
-            let _ = request.respond(Response::from_string("request body too large").with_status_code(413));
+            let _ = request.respond(json_response(413, &json!("request body too large")));
             continue;
         }
         let args: Value = if body.trim().is_empty() { json!({}) } else { serde_json::from_str(&body).unwrap_or(json!({})) };
