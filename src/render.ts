@@ -1306,9 +1306,12 @@ function renderTrapToolbar(store: Store, pane: PaneState, tab: TrapTabState): HT
       oninput: (e: Event) => store.setTrapFilter(pane.id, (e.target as HTMLInputElement).value),
     }),
     el(
-      "label",
+      "button",
       {
+        type: "button",
         class: "toggle-label",
+        role: "switch",
+        "aria-checked": tab.useDisplayHints ? "true" : "false",
         title: 'Show varbind values with a DISPLAY-HINT formatted (e.g. 123 -> 12.3) or an enumerated value named (e.g. 2 -> "ok") instead of raw',
         onclick: () => store.toggleTrapUseDisplayHints(pane.id),
       },
