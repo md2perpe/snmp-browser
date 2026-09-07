@@ -245,49 +245,58 @@ fn main() {
     let settings = settings::load(&settings_path);
     // Seed a fresh settings.json immediately, matching the Tauri app's setup behavior.
     settings::save(&settings_path, &settings);
-    let state = AppState { settings_path, settings: Mutex::new(settings), last_parse: Mutex::new(None), trap_state: trap::TrapState::default() };
-    // Bridges the two async `gnmi_*` commands into this otherwise fully synchronous,
-    // single-threaded request loop - built once, not per-request.
-    let rt = tokio::runtime::Runtime::new().expect("failed to start the async runtime for gNMI commands");
+    let state = Arc::new(AppState { settings_path, settings: Mutex::new(settings), last_parse: Mutex::new(None), trap_state: trap::TrapState::default() });
+    // Bridges the two async `gnmi_*` commands into the per-request handler threads
+    // below - built once, not per-request.
+    let rt = Arc::new(tokio::runtime::Runtime::new().expect("failed to start the async runtime for gNMI commands"));
 
     let server = Server::http(("127.0.0.1", port)).expect("failed to bind HTTP server");
     println!("SNMP MIB Client standalone backend listening on http://127.0.0.1:{port}");
     println!("Settings file: {}", state.settings_path.display());
 
-    for mut request in server.incoming_requests() {
-        if *request.method() == Method::Options {
-            let mut response = Response::empty(204);
-            for h in cors_headers() {
-                response = response.with_header(h);
-            }
-            let _ = request.respond(response);
-            continue;
+    for request in server.incoming_requests() {
+        let state = Arc::clone(&state);
+        let rt = Arc::clone(&rt);
+        // Handle each request on its own thread. tiny_http gives no way to put a
+        // deadline on reading the body, so an incomplete body from one client
+        // would otherwise stall this loop and block every other client's requests.
+        std::thread::spawn(move || handle_request(request, &state, &rt));
+    }
+}
+
+fn handle_request(mut request: tiny_http::Request, state: &AppState, rt: &tokio::runtime::Runtime) {
+    if *request.method() == Method::Options {
+        let mut response = Response::empty(204);
+        for h in cors_headers() {
+            response = response.with_header(h);
         }
+        let _ = request.respond(response);
+        return;
+    }
 
-        let Some(cmd) = request.url().strip_prefix("/api/invoke/") else {
-            let _ = request.respond(json_response(404, &json!("not found")));
-            continue;
-        };
-        let cmd = cmd.to_string();
+    let Some(cmd) = request.url().strip_prefix("/api/invoke/") else {
+        let _ = request.respond(json_response(404, &json!("not found")));
+        return;
+    };
+    let cmd = cmd.to_string();
 
-        let mut body = String::new();
-        let body_too_large = {
-            let mut reader = request.as_reader().take(MAX_REQUEST_BODY_BYTES + 1);
-            reader.read_to_string(&mut body).is_err() || body.len() as u64 > MAX_REQUEST_BODY_BYTES
-        };
-        if body_too_large {
-            let _ = request.respond(json_response(413, &json!("request body too large")));
-            continue;
+    let mut body = String::new();
+    let body_too_large = {
+        let mut reader = request.as_reader().take(MAX_REQUEST_BODY_BYTES + 1);
+        reader.read_to_string(&mut body).is_err() || body.len() as u64 > MAX_REQUEST_BODY_BYTES
+    };
+    if body_too_large {
+        let _ = request.respond(json_response(413, &json!("request body too large")));
+        return;
+    }
+    let args: Value = if body.trim().is_empty() { json!({}) } else { serde_json::from_str(&body).unwrap_or(json!({})) };
+
+    match handle(state, rt, &cmd, &args) {
+        Ok(v) => {
+            let _ = request.respond(json_response(200, &v));
         }
-        let args: Value = if body.trim().is_empty() { json!({}) } else { serde_json::from_str(&body).unwrap_or(json!({})) };
-
-        match handle(&state, &rt, &cmd, &args) {
-            Ok(v) => {
-                let _ = request.respond(json_response(200, &v));
-            }
-            Err((status, msg)) => {
-                let _ = request.respond(json_response(status, &json!(msg)));
-            }
+        Err((status, msg)) => {
+            let _ = request.respond(json_response(status, &json!(msg)));
         }
     }
 }
