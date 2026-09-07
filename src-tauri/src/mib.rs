@@ -17,7 +17,7 @@
 //! entry if even that isn't known) and can be shown greyed out.
 
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use tree_sitter::{Node, Parser};
 
 #[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
@@ -156,7 +156,23 @@ pub(crate) fn push_error(errors: &mut Vec<FileErrors>, file: &str, msg: String) 
 
 /// Recursively collects every file under `dir` (including subdirectories),
 /// reporting any directory that can't be read as a parse error.
-pub(crate) fn collect_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>, errors: &mut Vec<FileErrors>) {
+pub(crate) fn collect_files(
+    dir: &std::path::Path,
+    out: &mut Vec<std::path::PathBuf>,
+    errors: &mut Vec<FileErrors>,
+    visited: &mut HashSet<std::path::PathBuf>,
+) {
+    let canonical_dir = match dir.canonicalize() {
+        Ok(path) => path,
+        Err(e) => {
+            push_error(errors, &dir.display().to_string(), format!("{e}"));
+            return;
+        }
+    };
+    if !visited.insert(canonical_dir) {
+        return;
+    }
+
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
         Err(e) => {
@@ -167,7 +183,7 @@ pub(crate) fn collect_files(dir: &std::path::Path, out: &mut Vec<std::path::Path
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            collect_files(&path, out, errors);
+            collect_files(&path, out, errors, visited);
         } else if path.is_file() {
             out.push(path);
         }
@@ -196,7 +212,7 @@ pub fn parse_directories(dirs: &[String]) -> ParseResult {
 
     for dir in dirs {
         let mut files = Vec::new();
-        collect_files(std::path::Path::new(dir), &mut files, &mut errors);
+        collect_files(std::path::Path::new(dir), &mut files, &mut errors, &mut HashSet::new());
         dir_files.push(DirFiles { dir: dir.clone(), files: files.iter().map(|p| p.display().to_string()).collect() });
         for path in files {
             let Ok(src) = std::fs::read_to_string(&path) else {
@@ -727,6 +743,24 @@ END
         let result = parse_directories(&[dir.path().to_string_lossy().to_string()]);
 
         let if_table = result.symbols.get("ifTable").expect("ifTable symbol should be found in a nested subdirectory");
+        assert!(if_table.resolved);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn directory_cycles_via_symlinks_do_not_recurse_forever() {
+        let dir = tempfile::tempdir().unwrap();
+        let sub = dir.path().join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        std::fs::write(sub.join("TEST.mib"), IF_TABLE_MIB).unwrap();
+        // A symlink back to the root turns the tree into a cycle; without
+        // tracking visited directories this would recurse until the stack
+        // overflows.
+        std::os::unix::fs::symlink(dir.path(), sub.join("loop")).unwrap();
+
+        let result = parse_directories(&[dir.path().to_string_lossy().to_string()]);
+
+        let if_table = result.symbols.get("ifTable").expect("ifTable symbol should still be found once");
         assert!(if_table.resolved);
     }
 

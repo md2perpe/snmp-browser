@@ -212,7 +212,7 @@ pub fn parse_directories(dirs: &[String]) -> YangParseResult {
 
     for dir in dirs {
         let mut files = Vec::new();
-        collect_files(std::path::Path::new(dir), &mut files, &mut errors);
+        collect_files(std::path::Path::new(dir), &mut files, &mut errors, &mut std::collections::HashSet::new());
         dir_files.push(DirFiles { dir: dir.clone(), files: files.iter().map(|p| p.display().to_string()).collect() });
         for path in files {
             if path.extension().and_then(|e| e.to_str()) != Some("yang") {
