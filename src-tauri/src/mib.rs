@@ -154,8 +154,29 @@ fn push_error(errors: &mut Vec<FileErrors>, file: &str, msg: String) {
     }
 }
 
-/// Recursively collects every file under `dir` (including subdirectories),
-/// reporting any directory that can't be read as a parse error.
+/// Recursively collects regular files beneath a directory while avoiding revisiting canonical paths.
+///
+/// Directory canonicalization and read failures are recorded in `errors`. Symlink cycles and
+/// previously visited directories are skipped.
+///
+/// # Examples
+///
+/// ```
+/// use std::collections::HashSet;
+///
+/// let root = std::env::temp_dir().join(format!("collect-files-{}", std::process::id()));
+/// std::fs::create_dir_all(&root).unwrap();
+/// std::fs::write(root.join("example.txt"), b"example").unwrap();
+///
+/// let mut files = Vec::new();
+/// let mut errors = Vec::new();
+/// let mut visited = HashSet::new();
+/// collect_files(&root, &mut files, &mut errors, &mut visited);
+///
+/// assert_eq!(files.len(), 1);
+/// assert!(errors.is_empty());
+/// std::fs::remove_dir_all(root).unwrap();
+/// ```
 fn collect_files(
     dir: &std::path::Path,
     out: &mut Vec<std::path::PathBuf>,
@@ -190,6 +211,16 @@ fn collect_files(
     }
 }
 
+/// Parses MIB files from the specified directories and builds their resolved data models.
+///
+/// Unresolved OIDs, syntax errors, and file-system errors are reported in the returned result.
+///
+/// # Examples
+///
+/// ```
+/// let result = parse_directories(&[]);
+/// assert!(result.errors.is_empty());
+/// ```
 pub fn parse_directories(dirs: &[String]) -> ParseResult {
     let mut parser = Parser::new();
     if parser.set_language(&tree_sitter_asn1::LANGUAGE.into()).is_err() {
