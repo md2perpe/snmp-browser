@@ -233,6 +233,10 @@ export interface TrapVarbind {
   /** MIB-resolved name (e.g. "ifDescr.3"), or the same as `oid` when nothing matched. */
   name: string;
   value: string;
+  /** DISPLAY-HINT declared on this varbind's MIB type, if any (e.g. "d-1"). */
+  displayHint?: string;
+  /** Enumerated-value labels keyed by the raw integer as a string (e.g. "2" -> "ok"). */
+  enumLabels?: Record<string, string>;
 }
 
 export interface TrapEvent {
@@ -277,6 +281,8 @@ export interface TrapTabState {
   lastSeq: number;
   expandedSeq: number | null;
   filterText: string;
+  /** When true, varbind values are shown with a DISPLAY-HINT formatted or an enumerated value named, instead of raw. */
+  useDisplayHints: boolean;
 }
 
 export type AnyTabState = TabState | TrapTabState | BenchmarkTabState | GnmiTabState;

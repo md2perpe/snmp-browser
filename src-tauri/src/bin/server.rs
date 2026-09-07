@@ -31,17 +31,31 @@ fn default_settings_path() -> PathBuf {
     PathBuf::from(home).join(".snmp-mib-client").join("settings.json")
 }
 
-fn cors_headers() -> Vec<Header> {
-    vec![
-        Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap(),
-        Header::from_bytes(&b"Access-Control-Allow-Methods"[..], &b"GET, POST, OPTIONS"[..]).unwrap(),
-        Header::from_bytes(&b"Access-Control-Allow-Headers"[..], &b"Content-Type"[..]).unwrap(),
-    ]
+fn allowed_origins() -> Vec<String> {
+    std::env::var("SNMP_MIB_CLIENT_ALLOWED_ORIGINS")
+        .unwrap_or_else(|_| "http://localhost:5173,http://127.0.0.1:5173,http://localhost:4173,http://127.0.0.1:4173".to_string())
+        .split(',')
+        .map(str::trim)
+        .filter(|origin| !origin.is_empty())
+        .map(str::to_string)
+        .collect()
 }
 
-fn json_response(status: u16, body: &Value) -> Response<std::io::Cursor<Vec<u8>>> {
+fn cors_headers(origin: Option<&str>) -> Vec<Header> {
+    let mut headers = Vec::new();
+    if let Some(origin) = origin {
+        headers.push(Header::from_bytes(&b"Access-Control-Allow-Origin"[..], origin.as_bytes()).unwrap());
+    }
+    headers.extend([
+        Header::from_bytes(&b"Access-Control-Allow-Methods"[..], &b"GET, POST, OPTIONS"[..]).unwrap(),
+        Header::from_bytes(&b"Access-Control-Allow-Headers"[..], &b"Content-Type"[..]).unwrap(),
+    ]);
+    headers
+}
+
+fn json_response(status: u16, body: &Value, origin: Option<&str>) -> Response<std::io::Cursor<Vec<u8>>> {
     let mut response = Response::from_data(serde_json::to_vec(body).unwrap()).with_status_code(status);
-    for h in cors_headers() {
+    for h in cors_headers(origin) {
         response = response.with_header(h);
     }
     response.with_header(Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap())
@@ -195,7 +209,8 @@ fn handle(state: &AppState, rt: &tokio::runtime::Runtime, cmd: &str, args: &Valu
                 *cache = Some(mib::parse_directories(&dirs));
             }
             let oid_index = Arc::new(mib::build_oid_index(&cache.as_ref().unwrap().tree));
-            state.trap_state.start(id, config, oid_index).map(|r| serde_json::to_value(&r).unwrap()).map_err(|e| (400, e))
+            let value_hints = Arc::new(cache.as_ref().unwrap().value_hints.clone());
+            state.trap_state.start(id, config, oid_index, value_hints).map(|r| serde_json::to_value(&r).unwrap()).map_err(|e| (400, e))
         }
 
         "stop_trap_listener" => {
@@ -246,6 +261,7 @@ fn main() {
     // Seed a fresh settings.json immediately, matching the Tauri app's setup behavior.
     settings::save(&settings_path, &settings);
     let state = Arc::new(AppState { settings_path, settings: Mutex::new(settings), last_parse: Mutex::new(None), trap_state: trap::TrapState::default() });
+    let allowed_origins = Arc::new(allowed_origins());
     // Bridges the two async `gnmi_*` commands into the per-request handler threads
     // below - built once, not per-request.
     let rt = Arc::new(tokio::runtime::Runtime::new().expect("failed to start the async runtime for gNMI commands"));
@@ -257,17 +273,26 @@ fn main() {
     for request in server.incoming_requests() {
         let state = Arc::clone(&state);
         let rt = Arc::clone(&rt);
+        let allowed_origins = Arc::clone(&allowed_origins);
         // Handle each request on its own thread. tiny_http gives no way to put a
         // deadline on reading the body, so an incomplete body from one client
         // would otherwise stall this loop and block every other client's requests.
-        std::thread::spawn(move || handle_request(request, &state, &rt));
+        std::thread::spawn(move || handle_request(request, &state, &rt, &allowed_origins));
     }
 }
 
-fn handle_request(mut request: tiny_http::Request, state: &AppState, rt: &tokio::runtime::Runtime) {
+fn handle_request(mut request: tiny_http::Request, state: &AppState, rt: &tokio::runtime::Runtime, allowed_origins: &[String]) {
+    let origin = request.headers().iter().find(|header| header.field.equiv("Origin")).map(|header| header.value.as_str().to_string());
+    if let Some(origin) = origin.as_deref() {
+        if !allowed_origins.iter().any(|allowed| allowed == origin) {
+            let _ = request.respond(Response::from_string("origin not allowed").with_status_code(403));
+            return;
+        }
+    }
+
     if *request.method() == Method::Options {
         let mut response = Response::empty(204);
-        for h in cors_headers() {
+        for h in cors_headers(origin.as_deref()) {
             response = response.with_header(h);
         }
         let _ = request.respond(response);
@@ -275,7 +300,7 @@ fn handle_request(mut request: tiny_http::Request, state: &AppState, rt: &tokio:
     }
 
     let Some(cmd) = request.url().strip_prefix("/api/invoke/") else {
-        let _ = request.respond(json_response(404, &json!("not found")));
+        let _ = request.respond(json_response(404, &json!("not found"), origin.as_deref()));
         return;
     };
     let cmd = cmd.to_string();
@@ -286,17 +311,17 @@ fn handle_request(mut request: tiny_http::Request, state: &AppState, rt: &tokio:
         reader.read_to_string(&mut body).is_err() || body.len() as u64 > MAX_REQUEST_BODY_BYTES
     };
     if body_too_large {
-        let _ = request.respond(json_response(413, &json!("request body too large")));
+        let _ = request.respond(json_response(413, &json!("request body too large"), origin.as_deref()));
         return;
     }
     let args: Value = if body.trim().is_empty() { json!({}) } else { serde_json::from_str(&body).unwrap_or(json!({})) };
 
     match handle(state, rt, &cmd, &args) {
         Ok(v) => {
-            let _ = request.respond(json_response(200, &v));
+            let _ = request.respond(json_response(200, &v, origin.as_deref()));
         }
         Err((status, msg)) => {
-            let _ = request.respond(json_response(status, &json!(msg)));
+            let _ = request.respond(json_response(status, &json!(msg), origin.as_deref()));
         }
     }
 }

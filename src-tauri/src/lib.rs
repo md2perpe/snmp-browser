@@ -261,7 +261,8 @@ fn start_trap_listener(state: State<AppState>, id: String, config: trap::TrapLis
         *cache = Some(mib::parse_directories(&dirs));
     }
     let oid_index = Arc::new(mib::build_oid_index(&cache.as_ref().unwrap().tree));
-    state.trap_state.start(id, config, oid_index)
+    let value_hints = Arc::new(cache.as_ref().unwrap().value_hints.clone());
+    state.trap_state.start(id, config, oid_index, value_hints)
 }
 
 #[tauri::command]

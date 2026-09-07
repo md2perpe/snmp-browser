@@ -1120,6 +1120,13 @@ button {
   font-size: 11px;
   color: var(--text-muted);
   cursor: pointer;
+  /* Resets <button> chrome for toggles built on a button instead of a label,
+     so a keyboard-focusable toggle looks identical to a label-wrapped one. */
+  border: none;
+  background: none;
+  padding: 0;
+  margin: 0;
+  font-family: inherit;
 }
 .toggle-track {
   width: 30px;

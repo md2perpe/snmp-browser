@@ -17,7 +17,7 @@
 //! entry if even that isn't known) and can be shown greyed out.
 
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use tree_sitter::{Node, Parser};
 
 #[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
@@ -80,6 +80,12 @@ pub struct DirFiles {
     pub files: Vec<String>,
 }
 
+/// `oid -> (display-hint, enum labels)` for every resolved OBJECT-TYPE definition (scalar or
+/// table column) that carries one, sorted by arc count descending for a longest-prefix-match
+/// walk (see `resolve_value_hint` in `trap.rs`) - the trap listener's equivalent of the
+/// `displayHints`/`enumLabels` maps `snmp::fetch_table` returns per column.
+pub type ValueHintIndex = Vec<(String, Option<String>, Vec<(i64, String)>)>;
+
 #[derive(Serialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ParseResult {
@@ -92,6 +98,10 @@ pub struct ParseResult {
     pub symbols: HashMap<String, SymbolInfo>,
     pub errors: Vec<FileErrors>,
     pub dir_files: Vec<DirFiles>,
+    /// Not sent to the frontend (see `ValueHintIndex`) - only consumed server-side when starting
+    /// a trap listener.
+    #[serde(skip)]
+    pub value_hints: ValueHintIndex,
 }
 
 /// Builds a reverse `oid -> name` index from a parsed tree, for labeling numeric OIDs (e.g.
@@ -110,6 +120,37 @@ pub fn build_oid_index(tree: &[MibTreeNode]) -> Vec<(String, String)> {
     }
     walk(tree, &mut out);
     out.sort_by_key(|(oid, _)| std::cmp::Reverse(oid.matches('.').count()));
+    out
+}
+
+/// Builds a `ValueHintIndex` from the intermediate state `parse_directories` already computes
+/// while resolving OIDs - the same DISPLAY-HINT/enum lookup `build_tables` does for table
+/// columns, but over every resolved scalar-shaped symbol (which, since a table's own columns
+/// are individually parsed as `RawKind::Scalar` too, covers both).
+fn build_value_hint_index(
+    raw: &[RawSymbol],
+    resolved: &HashMap<String, Vec<u32>>,
+    display_hints: &HashMap<String, String>,
+    tc_enum_values: &HashMap<String, Vec<(i64, String)>>,
+) -> ValueHintIndex {
+    let mut out: ValueHintIndex = raw
+        .iter()
+        .filter(|s| s.kind == RawKind::Scalar)
+        .filter_map(|s| {
+            let path = resolved.get(&s.name)?;
+            let hint = s.syntax_type_name.as_ref().and_then(|t| display_hints.get(t)).cloned();
+            let enum_values = if !s.enum_values.is_empty() {
+                s.enum_values.clone()
+            } else {
+                s.syntax_type_name.as_ref().and_then(|t| tc_enum_values.get(t)).cloned().unwrap_or_default()
+            };
+            if hint.is_none() && enum_values.is_empty() {
+                return None;
+            }
+            Some((dotted(path), hint, enum_values))
+        })
+        .collect();
+    out.sort_by_key(|(oid, _, _)| std::cmp::Reverse(oid.matches('.').count()));
     out
 }
 
@@ -154,9 +195,41 @@ pub(crate) fn push_error(errors: &mut Vec<FileErrors>, file: &str, msg: String) 
     }
 }
 
-/// Recursively collects every file under `dir` (including subdirectories),
-/// reporting any directory that can't be read as a parse error.
-pub(crate) fn collect_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>, errors: &mut Vec<FileErrors>) {
+/// Recursively collects regular files beneath a directory while avoiding revisiting canonical paths.
+///
+/// Directory canonicalization and read failures are recorded in `errors`. Symlink cycles and
+/// previously visited directories are skipped.
+///
+/// # Examples
+///
+/// This is a crate-private helper (also used by `yang.rs`), so the example below is
+/// illustrative only (not run as a doctest, since it's unreachable from an external crate):
+///
+/// ```ignore
+/// use std::collections::HashSet;
+///
+/// let mut files = Vec::new();
+/// let mut errors = Vec::new();
+/// let mut visited = HashSet::new();
+/// collect_files(std::path::Path::new("./mibs"), &mut files, &mut errors, &mut visited);
+/// ```
+pub(crate) fn collect_files(
+    dir: &std::path::Path,
+    out: &mut Vec<std::path::PathBuf>,
+    errors: &mut Vec<FileErrors>,
+    visited: &mut HashSet<std::path::PathBuf>,
+) {
+    let canonical_dir = match dir.canonicalize() {
+        Ok(path) => path,
+        Err(e) => {
+            push_error(errors, &dir.display().to_string(), format!("{e}"));
+            return;
+        }
+    };
+    if !visited.insert(canonical_dir) {
+        return;
+    }
+
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
         Err(e) => {
@@ -167,13 +240,25 @@ pub(crate) fn collect_files(dir: &std::path::Path, out: &mut Vec<std::path::Path
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            collect_files(&path, out, errors);
+            collect_files(&path, out, errors, visited);
         } else if path.is_file() {
             out.push(path);
         }
     }
 }
 
+/// Parses MIB files from the specified directories and builds their resolved data models.
+///
+/// Unresolved OIDs, syntax errors, and file-system errors are reported in the returned result.
+///
+/// # Examples
+///
+/// ```
+/// use snmp_mib_client_lib::mib::parse_directories;
+///
+/// let result = parse_directories(&[]);
+/// assert!(result.errors.is_empty());
+/// ```
 pub fn parse_directories(dirs: &[String]) -> ParseResult {
     let mut parser = Parser::new();
     if parser.set_language(&tree_sitter_asn1::LANGUAGE.into()).is_err() {
@@ -196,7 +281,7 @@ pub fn parse_directories(dirs: &[String]) -> ParseResult {
 
     for dir in dirs {
         let mut files = Vec::new();
-        collect_files(std::path::Path::new(dir), &mut files, &mut errors);
+        collect_files(std::path::Path::new(dir), &mut files, &mut errors, &mut HashSet::new());
         dir_files.push(DirFiles { dir: dir.clone(), files: files.iter().map(|p| p.display().to_string()).collect() });
         for path in files {
             let Ok(src) = std::fs::read_to_string(&path) else {
@@ -224,6 +309,7 @@ pub fn parse_directories(dirs: &[String]) -> ParseResult {
     let tree = build_tree(&raw, &resolved);
     let tables_tree = build_tables_tree(&raw, &resolved);
     let tables = build_tables(&raw, &sequence_types, &display_hints, &tc_enum_values, &resolved);
+    let value_hints = build_value_hint_index(&raw, &resolved, &display_hints, &tc_enum_values);
     let symbols = raw
         .iter()
         .filter(|s| s.kind != RawKind::Other)
@@ -238,7 +324,7 @@ pub fn parse_directories(dirs: &[String]) -> ParseResult {
         })
         .collect();
 
-    ParseResult { tree, tables_tree, tables, symbols, errors, dir_files }
+    ParseResult { tree, tables_tree, tables, symbols, errors, dir_files, value_hints }
 }
 
 pub(crate) fn node_text<'a>(node: Node, src: &'a [u8]) -> &'a str {
@@ -730,6 +816,24 @@ END
         assert!(if_table.resolved);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn directory_cycles_via_symlinks_do_not_recurse_forever() {
+        let dir = tempfile::tempdir().unwrap();
+        let sub = dir.path().join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        std::fs::write(sub.join("TEST.mib"), IF_TABLE_MIB).unwrap();
+        // A symlink back to the root turns the tree into a cycle; without
+        // tracking visited directories this would recurse until the stack
+        // overflows.
+        std::os::unix::fs::symlink(dir.path(), sub.join("loop")).unwrap();
+
+        let result = parse_directories(&[dir.path().to_string_lossy().to_string()]);
+
+        let if_table = result.symbols.get("ifTable").expect("ifTable symbol should still be found once");
+        assert!(if_table.resolved);
+    }
+
     #[test]
     fn resolves_absolute_oids_across_the_ancestor_chain() {
         let dir = write_fixture(IF_TABLE_MIB);
@@ -1077,6 +1181,95 @@ END
         let table = result.tables.get("dcpEnvTable").expect("dcpEnvTable definition");
         let status = table.columns.iter().find(|c| c.name == "dcpEnvFanStatus").expect("dcpEnvFanStatus column");
         assert_eq!(status.enum_values, vec![(1, "notPresent".to_string()), (2, "ok".to_string()), (3, "alarm".to_string())]);
+    }
+
+    /// The trap listener resolves a varbind's DISPLAY-HINT/enum labels by absolute OID (see
+    /// `trap::resolve_value_hint`), not by column name - checks the index it's built from is
+    /// keyed that way and only covers columns that actually have one or the other.
+    #[test]
+    fn value_hint_index_covers_table_columns_by_absolute_oid() {
+        const MIB: &str = r#"
+TEST-MIB DEFINITIONS ::= BEGIN
+
+mib-2 OBJECT IDENTIFIER ::= { 1 3 6 1 2 1 }
+dcpEnv OBJECT IDENTIFIER ::= { mib-2 99 }
+
+DcpTemperature ::= TEXTUAL-CONVENTION
+    DISPLAY-HINT "d-1"
+    STATUS current
+    DESCRIPTION "Tenths of a degree C"
+    SYNTAX INTEGER
+
+FanStatus ::= TEXTUAL-CONVENTION
+    STATUS current
+    DESCRIPTION "Fan status"
+    SYNTAX INTEGER { notPresent(1), ok(2), alarm(3) }
+
+dcpEnvTable OBJECT-TYPE
+    SYNTAX SEQUENCE OF DcpEnvEntry
+    MAX-ACCESS not-accessible
+    STATUS current
+    DESCRIPTION "t"
+    ::= { dcpEnv 1 }
+
+dcpEnvEntry OBJECT-TYPE
+    SYNTAX DcpEnvEntry
+    MAX-ACCESS not-accessible
+    STATUS current
+    DESCRIPTION "e"
+    INDEX { dcpEnvIndex }
+    ::= { dcpEnvTable 1 }
+
+DcpEnvEntry ::= SEQUENCE {
+    dcpEnvIndex INTEGER,
+    dcpEnvTemp DcpTemperature,
+    dcpEnvFanStatus FanStatus,
+    dcpEnvLabel OCTET STRING
+}
+
+dcpEnvIndex OBJECT-TYPE
+    SYNTAX INTEGER
+    MAX-ACCESS not-accessible
+    STATUS current
+    DESCRIPTION "i"
+    ::= { dcpEnvEntry 1 }
+
+dcpEnvTemp OBJECT-TYPE
+    SYNTAX DcpTemperature
+    MAX-ACCESS read-only
+    STATUS current
+    DESCRIPTION "temp"
+    ::= { dcpEnvEntry 2 }
+
+dcpEnvFanStatus OBJECT-TYPE
+    SYNTAX FanStatus
+    MAX-ACCESS read-only
+    STATUS current
+    DESCRIPTION "status"
+    ::= { dcpEnvEntry 3 }
+
+dcpEnvLabel OBJECT-TYPE
+    SYNTAX OCTET STRING
+    MAX-ACCESS read-only
+    STATUS current
+    DESCRIPTION "label"
+    ::= { dcpEnvEntry 4 }
+
+END
+"#;
+        let dir = write_fixture(MIB);
+        let result = parse_directories(&[dir.path().to_string_lossy().to_string()]);
+
+        let temp = result.value_hints.iter().find(|(oid, _, _)| oid == "1.3.6.1.2.1.99.1.1.2").expect("dcpEnvTemp value hint");
+        assert_eq!(temp.1, Some("d-1".to_string()));
+        assert!(temp.2.is_empty());
+
+        let status = result.value_hints.iter().find(|(oid, _, _)| oid == "1.3.6.1.2.1.99.1.1.3").expect("dcpEnvFanStatus value hint");
+        assert_eq!(status.1, None);
+        assert_eq!(status.2, vec![(1, "notPresent".to_string()), (2, "ok".to_string()), (3, "alarm".to_string())]);
+
+        // Neither a DISPLAY-HINT nor enumerated values - not in the index.
+        assert!(result.value_hints.iter().all(|(oid, _, _)| oid != "1.3.6.1.2.1.99.1.1.4"));
     }
 
     /// Locks down the wire shape the TypeScript frontend actually deserializes:
