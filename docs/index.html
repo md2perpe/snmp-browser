@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>SNMP MIB Client</title>
-  <meta name="description" content="A desktop app for browsing MIB files and polling live values from SNMP-managed devices — switches, routers, and similar network equipment." />
+  <meta name="description" content="A desktop app for browsing MIB and YANG files and polling live values from SNMP- and gNMI-managed devices — switches, routers, and similar network equipment." />
   <link rel="icon" type="image/png" href="assets/icon.png" />
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -35,10 +35,10 @@
         <img src="assets/icon.png" alt="SNMP MIB Client icon" width="96" height="96" class="hero-icon" />
         <h1>Browse MIBs. Poll devices. See what changed.</h1>
         <p class="hero-sub">
-          A desktop app for browsing MIB files and polling live values from SNMP-managed
-          devices — switches, routers, and similar network equipment. Point it at your MIB
-          directories, pick a scalar or table, connect over SNMPv1/v2c/v3, and fetch live
-          values in a sortable, diffable table.
+          A desktop app for browsing MIB and YANG files and polling live values from
+          SNMP- and gNMI-managed devices — switches, routers, and similar network equipment.
+          Point it at your MIB or YANG directories, pick a scalar, table, or path, connect
+          over SNMPv1/v2c/v3 or gNMI, and fetch live values in a sortable, diffable table.
         </p>
         <div class="hero-ctas">
           <a href="#download" id="hero-download-btn" class="btn btn-primary">
@@ -52,7 +52,7 @@
 
     <section id="features" class="section">
       <div class="wrap">
-        <h2 class="section-title">Everything you need to poke at a MIB</h2>
+        <h2 class="section-title">Everything you need to poke at a MIB or gNMI target</h2>
         <div class="grid features-grid">
           <article class="card">
             <div class="card-icon icon-blue">🌳</div>
@@ -101,6 +101,24 @@
             <h3>Walk benchmark</h3>
             <p>Time repeated SNMP walks of any subtree and see min/median/mean/P95/max and
               standard deviation across the runs.</p>
+          </article>
+          <article class="card">
+            <div class="card-icon icon-blue">📡</div>
+            <h3>gNMI support</h3>
+            <p>Browse a gNMI target's advertised Capabilities and run Get requests against
+              any path, over TLS (with an optional skip-verify mode for self-signed certs).</p>
+          </article>
+          <article class="card">
+            <div class="card-icon icon-green">📄</div>
+            <h3>YANG parsing</h3>
+            <p>Point it at your <code>.yang</code> directories and browse the schema as a
+              path tree — the same "browse before you fetch" experience MIBs give SNMP.</p>
+          </article>
+          <article class="card">
+            <div class="card-icon icon-blue">📨</div>
+            <h3>Trap &amp; inform listener</h3>
+            <p>Listen for SNMPv1/v2c/v3 traps and informs, decoded live and labeled against
+              your parsed MIBs, with a filterable, expandable event log.</p>
           </article>
         </div>
       </div>
@@ -187,9 +205,11 @@
           <div class="tech-item">
             <h3>Backend</h3>
             <p><a href="https://tauri.app/">Tauri 2</a> (Rust), using
-              <a href="https://crates.io/crates/snmp2"><code>snmp2</code></a> for SNMP and
-              <a href="https://tree-sitter.github.io/tree-sitter/">tree-sitter</a> with a
-              custom ASN.1 grammar to parse MIB files.</p>
+              <a href="https://crates.io/crates/snmp2"><code>snmp2</code></a> for SNMP,
+              <a href="https://github.com/hyperium/tonic"><code>tonic</code></a>/<code>prost</code>
+              for gNMI over gRPC, and
+              <a href="https://tree-sitter.github.io/tree-sitter/">tree-sitter</a> with custom
+              ASN.1 and YANG grammars to parse MIB and YANG files.</p>
           </div>
         </div>
       </div>
