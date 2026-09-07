@@ -173,6 +173,20 @@ button {
   padding-top: 3px;
 }
 
+/* Labels a group of sidebar sections (SNMP's MIB dirs+tree, gNMI's YANG dirs+tree). */
+.sidebar-section-head {
+  flex: none;
+  padding: 8px 14px 4px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  background: var(--bg-deep);
+  border-bottom: 1px solid var(--border-soft);
+  border-top: 1px solid var(--border-soft);
+}
+
 .mib-dirs {
   flex: none;
   padding: 12px 14px 10px;
@@ -664,6 +678,7 @@ button {
   overflow-y: auto;
   padding: 6px 6px 16px;
 }
+
 .tree-row {
   cursor: pointer;
 }
@@ -1005,6 +1020,11 @@ button {
 .toolbar-btn:disabled {
   opacity: 0.45;
   cursor: default;
+}
+.toolbar-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
 }
 
 .split-btn {
@@ -1427,4 +1447,69 @@ table.trap-table {
 .trap-varbind-value {
   color: var(--text-primary);
   overflow-wrap: anywhere;
+}
+
+.gnmi-tree {
+  padding: 8px 0;
+}
+.gnmi-tree-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 8px;
+  font-size: 11.5px;
+  cursor: pointer;
+  border-radius: 5px;
+}
+.gnmi-tree-row:hover {
+  background: var(--hover-weak);
+}
+.gnmi-tree-row.selected {
+  background: var(--accent-selected-bg);
+}
+.gnmi-tree-row.selected .gnmi-tree-name {
+  color: var(--tree-selected-text);
+  font-weight: 600;
+}
+.gnmi-tree-caret {
+  flex: none;
+  width: 14px;
+  text-align: center;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: transform 0.1s;
+}
+.gnmi-tree-name {
+  flex: none;
+  color: var(--text-secondary);
+  font-family: ui-monospace, Menlo, monospace;
+}
+.gnmi-tree-value {
+  color: var(--text-primary);
+  font-family: ui-monospace, Menlo, monospace;
+  overflow-wrap: anywhere;
+}
+.gnmi-caps {
+  padding: 12px 18px;
+  font-size: 11.5px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.gnmi-caps-row {
+  display: flex;
+  gap: 8px;
+}
+.gnmi-caps-label {
+  flex: none;
+  width: 120px;
+  color: var(--text-dim);
+}
+.gnmi-caps-models {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding-left: 128px;
+  font-family: ui-monospace, Menlo, monospace;
+  color: var(--text-secondary);
 }

@@ -7,6 +7,10 @@ import type {
   BenchmarkTabState,
   ConnectionParams,
   DirFiles,
+  GnmiCapabilities,
+  GnmiConnectionParams,
+  GnmiNode,
+  GnmiTabState,
   HostProfile,
   MibNode,
   MibProfile,
@@ -18,10 +22,15 @@ import type {
   SnmpVersion,
   TabState,
   Theme,
+  TlsMode,
   TrapEvent,
   TrapListenerStatus,
   TrapTabState,
   WalkTiming,
+  YangNode,
+  YangParseResult,
+  YangProfile,
+  YangProfilesResponse,
 } from "./types";
 
 type Patch<T> = Partial<T> | ((t: T) => Partial<T>);
@@ -32,12 +41,35 @@ const ROW_KEY_FIELD = "Index";
 const DEFAULT_SNMP_PORT = "161";
 const DEFAULT_SNMP_COMMUNITY = "public";
 const DEFAULT_TRAP_PORT = "162";
+const DEFAULT_GNMI_PORT = "57400";
+const DEFAULT_GNMI_USERNAME = "admin";
+const DEFAULT_GNMI_PASSWORD = "admin";
 const TRAP_POLL_INTERVAL_MS = 1000;
 /** Client-side mirror of the server's per-listener ring buffer cap (see `trap.rs::MAX_EVENTS`), so a long-idle tab's array doesn't grow unbounded. */
 const MAX_CLIENT_TRAP_EVENTS = 2000;
 const THEME_STORAGE_KEY = "snmpBrowserTheme";
+const LAST_ADDR_STORAGE_KEY = "snmpBrowserLastAddr";
 const DEFAULT_BENCHMARK_ITERATIONS = 10;
 const MAX_BENCHMARK_ITERATIONS = 1000;
+
+/** The host address most recently used for a connection attempt, from either an SNMP query tab
+ * or a gNMI tab - shared across both, so a new tab of either kind starts from wherever the user
+ * left off rather than a stale per-kind default. Persisted so it survives restarts. */
+function loadLastAddr(): string {
+  try {
+    return localStorage.getItem(LAST_ADDR_STORAGE_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function saveLastAddr(addr: string) {
+  try {
+    localStorage.setItem(LAST_ADDR_STORAGE_KEY, addr);
+  } catch {
+    // localStorage unavailable - the last-used address just won't persist across restarts.
+  }
+}
 
 function loadTheme(): Theme {
   try {
@@ -107,11 +139,25 @@ export class Store {
   tablesTree: MibNode[] = [];
   /** Files found under each configured MIB directory, for showing them as subnodes in the sidebar. */
   dirFiles: DirFiles[] = [];
+  /** The gNMI tab's schema tree, parsed from the active YANG profile's directories. */
+  yangTree: YangNode[] = [];
+  yangDirFiles: DirFiles[] = [];
   /** This machine's non-loopback IPv4 addresses, for the trap listener's "point your device here" hint. Empty until a trap tab has been opened at least once. */
   localIps: string[] = [];
 
+  /** Host address most recently used for a connection attempt (SNMP or gNMI), to pre-fill new
+   * tabs of either kind. Persisted so it survives restarts. */
+  private lastUsedAddr: string = loadLastAddr();
+
   /** Iteration count the next benchmark tab opens with - the last one the user picked. */
   private benchmarkIterations = DEFAULT_BENCHMARK_ITERATIONS;
+
+  /** Records `addr` as the last-used connection address, if it isn't already, and persists it. */
+  private noteUsedAddr(addr: string) {
+    if (!addr || addr === this.lastUsedAddr) return;
+    this.lastUsedAddr = addr;
+    saveLastAddr(addr);
+  }
 
   private listeners: Array<() => void> = [];
   private tickListeners: Array<() => void> = [];
@@ -134,6 +180,14 @@ export class Store {
       renamingMibProfile: false,
       parseErrors: [],
       parseErrorsOpen: false,
+      yangProfiles: [],
+      activeYangProfileId: "",
+      yangDirDraft: null,
+      yangProfileDraft: null,
+      renamingYangProfile: false,
+      yangParseErrors: [],
+      yangParseErrorsOpen: false,
+      selectedYangNodeId: "",
       leftWidth: 330,
       leftCollapsed: false,
       panes: [{ id: "p1", width: null, activeTabId: null, tabs: [] }],
@@ -148,14 +202,16 @@ export class Store {
   }
 
   async init() {
-    const [profiles, hostProfiles] = await Promise.all([
+    const [profiles, hostProfiles, yangProfiles] = await Promise.all([
       invoke<MibProfilesResponse>("list_mib_profiles"),
       invoke<HostProfile[]>("list_host_profiles"),
+      invoke<YangProfilesResponse>("list_yang_profiles"),
     ]);
     this.applyMibProfilesResponse(profiles);
     this.hostProfiles = hostProfiles;
+    this.applyYangProfilesResponse(yangProfiles);
     this.notify();
-    await this.loadMibTree();
+    await Promise.all([this.loadMibTree(), this.loadYangTree()]);
     if (isTauri) void this.runUpdateCheck();
   }
 
@@ -174,6 +230,15 @@ export class Store {
 
   activeMibProfile(): MibProfile | undefined {
     return this.state.mibProfiles.find((p) => p.id === this.state.activeMibProfileId);
+  }
+
+  private applyYangProfilesResponse(resp: YangProfilesResponse) {
+    this.state.yangProfiles = resp.profiles;
+    this.state.activeYangProfileId = resp.activeProfileId;
+  }
+
+  activeYangProfile(): YangProfile | undefined {
+    return this.state.yangProfiles.find((p) => p.id === this.state.activeYangProfileId);
   }
 
   onChange(fn: () => void) {
@@ -205,7 +270,7 @@ export class Store {
       kind: "query",
       id,
       hostId: h?.id ?? "",
-      hostAddr: h?.addr ?? "",
+      hostAddr: this.lastUsedAddr || h?.addr || "",
       hostPort: h?.port ?? DEFAULT_SNMP_PORT,
       version: "v2c",
       community: h?.community ?? DEFAULT_SNMP_COMMUNITY,
@@ -280,6 +345,30 @@ export class Store {
     };
   }
 
+  /** A gNMI tab starts with blank connection fields - there's no gNMI equivalent of a host profile yet, so it's always a fresh, freely-editable tab. The address defaults to whatever was last used (SNMP or gNMI), and the rest to this deployment's usual gNMI target shape. The path defaults to "/" so Get is immediately usable to discover the whole tree. */
+  makeGnmiTab(id: string, opts: Partial<GnmiTabState> = {}): GnmiTabState {
+    return {
+      kind: "gnmi",
+      id,
+      hostAddr: this.lastUsedAddr,
+      hostPort: DEFAULT_GNMI_PORT,
+      tlsMode: "insecure",
+      caCertPath: "",
+      clientCertPath: "",
+      clientKeyPath: "",
+      username: DEFAULT_GNMI_USERNAME,
+      password: DEFAULT_GNMI_PASSWORD,
+      path: "/",
+      capabilities: null,
+      result: null,
+      expandedIds: {},
+      loading: false,
+      fetchError: null,
+      lastFetch: "",
+      ...opts,
+    };
+  }
+
   // ---------- lookups ----------
 
   getPane(id: string): PaneState | undefined {
@@ -323,6 +412,15 @@ export class Store {
     if (!pane) return;
     const tab = this.getPaneActiveTab(pane);
     if (!tab || tab.kind !== "benchmark") return;
+    this.applyPatch(tab, patch);
+    this.notify();
+  }
+
+  updateActiveGnmiTabInPane(paneId: string, patch: Patch<GnmiTabState>) {
+    const pane = this.getPane(paneId);
+    if (!pane) return;
+    const tab = this.getPaneActiveTab(pane);
+    if (!tab || tab.kind !== "gnmi") return;
     this.applyPatch(tab, patch);
     this.notify();
   }
@@ -404,6 +502,17 @@ export class Store {
     this.closeTreeContextMenu();
   }
 
+  /** Opens a new, blank gNMI browser tab in the given pane. */
+  openGnmiTab(paneId: string) {
+    const pane = this.getPane(paneId);
+    if (!pane) return;
+    const tab = this.makeGnmiTab("tab" + Date.now());
+    pane.tabs.push(tab);
+    pane.activeTabId = tab.id;
+    this.state.activePaneId = paneId;
+    this.notify();
+  }
+
   closeTabInPane(paneId: string, tabId: string) {
     const pane = this.getPane(paneId);
     if (!pane) return;
@@ -415,6 +524,8 @@ export class Store {
     }
     // The walk in flight can't be aborted, but this stops the run from starting another.
     if (tab?.kind === "benchmark" && tab.running) tab.cancelling = true;
+    // gNMI Phase 1's Capabilities/Get calls are one-shot, so a "gnmi" tab has no backend
+    // session to tear down here (unlike trap/benchmark above) - that arrives with Subscribe.
     pane.tabs = pane.tabs.filter((t) => t.id !== tabId);
     if (pane.activeTabId === tabId) {
       pane.activeTabId = pane.tabs.length ? pane.tabs[pane.tabs.length - 1].id : null;
@@ -433,6 +544,8 @@ export class Store {
     if (newTab?.kind === "trap") newTab = { ...newTab, running: false, boundAddr: "", startError: null, events: [], lastSeq: 0, expandedSeq: null };
     // Likewise, a duplicated benchmark tab doesn't inherit the run loop backing it.
     if (newTab?.kind === "benchmark") newTab = { ...newTab, running: false, cancelling: false };
+    // A duplicated gnmi tab needs no such reset in Phase 1 - its Capabilities/Get calls are
+    // one-shot, not a backing session like trap/benchmark above.
     pane.width = 620;
     const newPane: PaneState = { id: "pane" + Date.now(), width: null, tabs: newTab ? [newTab] : [], activeTabId: newTab?.id ?? null };
     this.state.panes.push(newPane);
@@ -451,6 +564,7 @@ export class Store {
         if (t.running) void invoke("stop_trap_listener", { id: t.id });
       }
       if (t.kind === "benchmark" && t.running) t.cancelling = true;
+      // gNMI Phase 1 has no backend session to stop here either - see closeTabInPane.
     });
     this.state.panes = this.state.panes.filter((p) => p.id !== paneId);
     if (this.state.panes.length === 1) this.state.panes[0].width = null;
@@ -674,6 +788,159 @@ export class Store {
     this.notify();
   }
 
+  // ---------- YANG directories / profiles (gNMI schema tree) ----------
+
+  /** Single-click: highlight the row, and - if the active pane's active tab is a gNMI tab - stage
+   * the node's path there too, mirroring the sidebar's role as a browsing aid for whichever gNMI
+   * tab is currently in view. A no-op on the tab when it isn't a gNMI tab (or the node has no
+   * usable path, e.g. an unresolved `uses` placeholder). */
+  selectYangNode(node: YangNode) {
+    this.state.selectedYangNodeId = node.id;
+    if (node.path) {
+      this.updateActiveGnmiTabInPane(this.state.activePaneId, { path: node.path });
+    } else {
+      this.notify();
+    }
+  }
+
+  /** Double-click: opens a new gNMI tab in the active pane with the node's path pre-filled - the
+   * gNMI counterpart to `openNodeInNewTab`. A no-op for a node with no usable path (e.g. an
+   * unresolved `uses` placeholder). */
+  openYangNodeInNewTab(node: YangNode) {
+    if (!node.path) return;
+    this.state.selectedYangNodeId = node.id;
+    const pane = this.getPane(this.state.activePaneId);
+    if (!pane) return;
+    const tab = this.makeGnmiTab("tab" + Date.now(), { path: node.path });
+    pane.tabs.push(tab);
+    pane.activeTabId = tab.id;
+    this.notify();
+  }
+
+  toggleYangParseErrors() {
+    this.state.yangParseErrorsOpen = !this.state.yangParseErrorsOpen;
+    this.notify();
+  }
+
+  async loadYangTree() {
+    const result = await invoke<YangParseResult>("get_yang_tree");
+    this.yangTree = result.tree;
+    this.yangDirFiles = result.dirFiles;
+    this.state.yangParseErrors = result.errors;
+    if (result.errors.length === 0) this.state.yangParseErrorsOpen = false;
+    this.notify();
+  }
+
+  async addYangDir() {
+    if (!isTauri) {
+      this.state.yangDirDraft = "";
+      this.notify();
+      return;
+    }
+    const selected = await pickDirectory();
+    if (!selected) return;
+    await this.commitYangDir(selected);
+  }
+
+  updateYangDirDraft(text: string) {
+    this.state.yangDirDraft = text;
+    this.notify();
+  }
+
+  cancelYangDirDraft() {
+    this.state.yangDirDraft = null;
+    this.notify();
+  }
+
+  async submitYangDirDraft() {
+    const path = this.state.yangDirDraft?.trim();
+    this.state.yangDirDraft = null;
+    if (!path) {
+      this.notify();
+      return;
+    }
+    await this.commitYangDir(path);
+  }
+
+  private async commitYangDir(path: string) {
+    this.applyYangProfilesResponse(await invoke<YangProfilesResponse>("add_yang_dir", { path }));
+    this.notify();
+    await this.loadYangTree();
+  }
+
+  async removeYangDir(path: string) {
+    this.applyYangProfilesResponse(await invoke<YangProfilesResponse>("remove_yang_dir", { path }));
+    this.notify();
+    await this.loadYangTree();
+  }
+
+  async switchYangProfile(id: string) {
+    if (id === this.state.activeYangProfileId) return;
+    this.applyYangProfilesResponse(await invoke<YangProfilesResponse>("set_active_yang_profile", { id }));
+    this.notify();
+    await this.loadYangTree();
+  }
+
+  startYangProfileDraft() {
+    this.state.yangProfileDraft = "";
+    this.notify();
+  }
+
+  updateYangProfileDraft(text: string) {
+    this.state.yangProfileDraft = text;
+    this.notify();
+  }
+
+  cancelYangProfileDraft() {
+    this.state.yangProfileDraft = null;
+    this.notify();
+  }
+
+  async submitYangProfileDraft() {
+    const name = this.state.yangProfileDraft?.trim();
+    this.state.yangProfileDraft = null;
+    if (!name) {
+      this.notify();
+      return;
+    }
+    this.applyYangProfilesResponse(await invoke<YangProfilesResponse>("add_yang_profile", { name }));
+    this.notify();
+    await this.loadYangTree();
+  }
+
+  async removeYangProfile(id: string) {
+    if (this.state.yangProfiles.length <= 1) return;
+    const wasActive = id === this.state.activeYangProfileId;
+    this.applyYangProfilesResponse(await invoke<YangProfilesResponse>("remove_yang_profile", { id }));
+    if (wasActive) {
+      this.notify();
+      await this.loadYangTree();
+    } else {
+      this.notify();
+    }
+  }
+
+  startRenamingYangProfile() {
+    this.state.renamingYangProfile = true;
+    this.notify();
+  }
+
+  cancelRenamingYangProfile() {
+    this.state.renamingYangProfile = false;
+    this.notify();
+  }
+
+  async renameYangProfile(id: string, name: string) {
+    this.state.renamingYangProfile = false;
+    const trimmed = name.trim();
+    if (!trimmed) {
+      this.notify();
+      return;
+    }
+    this.applyYangProfilesResponse(await invoke<YangProfilesResponse>("rename_yang_profile", { id, name: trimmed }));
+    this.notify();
+  }
+
   /** The tree currently shown in the sidebar: the full group hierarchy, or the flat tables-only view. */
   activeTree(): MibNode[] {
     return this.state.tablesOnlyMode ? this.tablesTree : this.tree;
@@ -866,6 +1133,7 @@ export class Store {
       tab.fetchError = "Fill in the host address, port, and " + (tab.version === "v3" ? "security user" : "community") + " first";
       return;
     }
+    this.noteUsedAddr(tab.hostAddr);
     try {
       const result = await invoke<{
         columns: string[];
@@ -1053,6 +1321,88 @@ export class Store {
 
   setTrapFilter(paneId: string, text: string) {
     this.updateActiveTrapTabInPane(paneId, { filterText: text });
+  }
+
+  // ---------- gNMI tab ----------
+
+  setGnmiTlsMode(paneId: string, tlsMode: TlsMode) {
+    this.updateActiveGnmiTabInPane(paneId, { tlsMode });
+  }
+
+  toggleGnmiNodeExpanded(paneId: string, nodeKey: string) {
+    this.updateActiveGnmiTabInPane(paneId, (t) => ({ expandedIds: { ...t.expandedIds, [nodeKey]: !t.expandedIds[nodeKey] } }));
+  }
+
+  /** A gNMI tab's connection fields in the shape the backend's `gnmi_capabilities`/`gnmi_get` commands expect. */
+  private gnmiConnectionOf(tab: GnmiTabState): GnmiConnectionParams {
+    return {
+      hostAddr: tab.hostAddr,
+      hostPort: tab.hostPort,
+      tlsMode: tab.tlsMode,
+      caCertPath: tab.caCertPath || null,
+      clientCertPath: tab.clientCertPath || null,
+      clientKeyPath: tab.clientKeyPath || null,
+      username: tab.username || null,
+      password: tab.password || null,
+    };
+  }
+
+  /** Whether a gNMI tab's connection fields are filled in enough to attempt a call. */
+  hasCompleteGnmiConnection(tab: GnmiTabState): boolean {
+    return !!tab.hostAddr.trim() && !!tab.hostPort.trim();
+  }
+
+  async runGnmiCapabilities(paneId: string) {
+    const pane = this.getPane(paneId);
+    const tab = pane && this.getPaneActiveTab(pane);
+    if (!tab || tab.kind !== "gnmi") return;
+    if (!this.hasCompleteGnmiConnection(tab)) {
+      tab.fetchError = "Fill in the target address and port first";
+      this.notify();
+      return;
+    }
+    this.noteUsedAddr(tab.hostAddr);
+    tab.loading = true;
+    this.notify();
+    try {
+      tab.capabilities = await invoke<GnmiCapabilities>("gnmi_capabilities", { connection: this.gnmiConnectionOf(tab) });
+      tab.fetchError = null;
+    } catch (e) {
+      tab.fetchError = errorMessage(e);
+    }
+    tab.loading = false;
+    tab.lastFetch = new Date().toLocaleTimeString();
+    this.notify();
+  }
+
+  async runGnmiGet(paneId: string) {
+    const pane = this.getPane(paneId);
+    const tab = pane && this.getPaneActiveTab(pane);
+    if (!tab || tab.kind !== "gnmi") return;
+    if (!this.hasCompleteGnmiConnection(tab)) {
+      tab.fetchError = "Fill in the target address and port first";
+      this.notify();
+      return;
+    }
+    if (!tab.path.trim()) {
+      tab.fetchError = "Enter a gNMI path first";
+      this.notify();
+      return;
+    }
+    this.noteUsedAddr(tab.hostAddr);
+    tab.loading = true;
+    this.notify();
+    try {
+      const result = await invoke<{ roots: GnmiNode[] }>("gnmi_get", { connection: this.gnmiConnectionOf(tab), path: tab.path });
+      tab.result = result.roots;
+      tab.expandedIds = {};
+      tab.fetchError = null;
+    } catch (e) {
+      tab.fetchError = errorMessage(e);
+    }
+    tab.loading = false;
+    tab.lastFetch = new Date().toLocaleTimeString();
+    this.notify();
   }
 
   private startTrapPolling(tabId: string) {

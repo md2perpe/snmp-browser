@@ -1,10 +1,12 @@
+pub mod gnmi;
 pub mod mib;
 pub mod settings;
 pub mod snmp;
 pub mod trap;
+pub mod yang;
 
 use serde::Serialize;
-use settings::{HostProfile, MibProfile, Settings};
+use settings::{HostProfile, MibProfile, Settings, YangProfile};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tauri::{Manager, State};
@@ -112,6 +114,102 @@ fn remove_mib_dir(state: State<AppState>, path: String) -> MibProfilesResponse {
     resp
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct YangProfilesResponse {
+    profiles: Vec<YangProfile>,
+    active_profile_id: String,
+}
+
+fn yang_profiles_response(settings: &Settings) -> YangProfilesResponse {
+    YangProfilesResponse { profiles: settings.yang_profiles.clone(), active_profile_id: settings.active_yang_profile_id.clone() }
+}
+
+#[tauri::command]
+fn list_yang_profiles(state: State<AppState>) -> YangProfilesResponse {
+    yang_profiles_response(&state.settings.lock().unwrap())
+}
+
+#[tauri::command]
+fn add_yang_profile(state: State<AppState>, name: String) -> YangProfilesResponse {
+    let resp = {
+        let mut settings = state.settings.lock().unwrap();
+        settings.add_yang_profile(name);
+        yang_profiles_response(&settings)
+    };
+    state.save();
+    resp
+}
+
+#[tauri::command]
+fn remove_yang_profile(state: State<AppState>, id: String) -> YangProfilesResponse {
+    let resp = {
+        let mut settings = state.settings.lock().unwrap();
+        settings.remove_yang_profile(&id);
+        yang_profiles_response(&settings)
+    };
+    state.save();
+    resp
+}
+
+#[tauri::command]
+fn rename_yang_profile(state: State<AppState>, id: String, name: String) -> YangProfilesResponse {
+    let resp = {
+        let mut settings = state.settings.lock().unwrap();
+        settings.rename_yang_profile(&id, name);
+        yang_profiles_response(&settings)
+    };
+    state.save();
+    resp
+}
+
+#[tauri::command]
+fn set_active_yang_profile(state: State<AppState>, id: String) -> YangProfilesResponse {
+    let resp = {
+        let mut settings = state.settings.lock().unwrap();
+        if settings.yang_profiles.iter().any(|p| p.id == id) {
+            settings.active_yang_profile_id = id;
+        }
+        yang_profiles_response(&settings)
+    };
+    state.save();
+    resp
+}
+
+#[tauri::command]
+fn add_yang_dir(state: State<AppState>, path: String) -> YangProfilesResponse {
+    let resp = {
+        let mut settings = state.settings.lock().unwrap();
+        if let Some(p) = settings.active_yang_profile_mut() {
+            if !p.dirs.contains(&path) {
+                p.dirs.push(path);
+            }
+        }
+        yang_profiles_response(&settings)
+    };
+    state.save();
+    resp
+}
+
+#[tauri::command]
+fn remove_yang_dir(state: State<AppState>, path: String) -> YangProfilesResponse {
+    let resp = {
+        let mut settings = state.settings.lock().unwrap();
+        if let Some(p) = settings.active_yang_profile_mut() {
+            p.dirs.retain(|d| d != &path);
+        }
+        yang_profiles_response(&settings)
+    };
+    state.save();
+    resp
+}
+
+#[tauri::command]
+fn get_yang_tree(state: State<AppState>) -> yang::YangParseResult {
+    let dirs = state.settings.lock().unwrap().active_yang_profile().map(|p| p.dirs.clone()).unwrap_or_default();
+    yang::parse_directories(&dirs)
+}
+
 #[tauri::command]
 fn list_host_profiles(state: State<AppState>) -> Vec<HostProfile> {
     state.settings.lock().unwrap().host_profiles.clone()
@@ -186,6 +284,16 @@ fn local_ips() -> Vec<String> {
     trap::local_ips()
 }
 
+#[tauri::command]
+async fn gnmi_capabilities(connection: gnmi::GnmiConnectionParams) -> Result<gnmi::GnmiCapabilities, String> {
+    gnmi::capabilities(&connection).await
+}
+
+#[tauri::command]
+async fn gnmi_get(connection: gnmi::GnmiConnectionParams, path: String) -> Result<gnmi::GnmiTree, String> {
+    gnmi::get(&connection, &path).await
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -213,6 +321,14 @@ pub fn run() {
             set_active_mib_profile,
             add_mib_dir,
             remove_mib_dir,
+            list_yang_profiles,
+            add_yang_profile,
+            remove_yang_profile,
+            rename_yang_profile,
+            set_active_yang_profile,
+            add_yang_dir,
+            remove_yang_dir,
+            get_yang_tree,
             list_host_profiles,
             get_mib_tree,
             fetch,
@@ -221,7 +337,9 @@ pub fn run() {
             stop_trap_listener,
             poll_traps,
             clear_traps,
-            local_ips
+            local_ips,
+            gnmi_capabilities,
+            gnmi_get
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
