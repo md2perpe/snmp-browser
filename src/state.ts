@@ -1,3 +1,5 @@
+import { relaunch } from "@tauri-apps/plugin-process";
+import type { Update } from "@tauri-apps/plugin-updater";
 import { invoke, isTauri, pickDirectory } from "./api";
 import { DEFAULT_COL_WIDTH, mockHostProfiles } from "./mockData";
 import { checkForUpdate } from "./update";
@@ -169,6 +171,10 @@ export class Store {
   private trapPollTimers = new Map<string, ReturnType<typeof setInterval>>();
   /** Ticks re-renders while any tab is auto-refreshing, so the countdown ring animates. */
   private uiTickTimer: ReturnType<typeof setInterval> | null = null;
+  /** The `Update` handle behind an "available"/"downloading" `updateStatus`, so `installUpdate()` has something to call `downloadAndInstall()` on. */
+  private pendingUpdate: Update | null = null;
+  /** Throttles progress-driven re-renders during a download - `downloadAndInstall()`'s progress callback can fire many times a second. */
+  private lastUpdateProgressNotify = 0;
 
   constructor() {
     this.state = {
@@ -199,7 +205,7 @@ export class Store {
       exportMenu: null,
       theme: loadTheme(),
       themeMenu: null,
-      updateInfo: null,
+      updateStatus: null,
     };
     this.applyTheme(this.state.theme);
   }
@@ -221,12 +227,68 @@ export class Store {
     }
   }
 
-  /** Fire-and-forget update check, run on startup and then every `UPDATE_CHECK_INTERVAL_MS` - see `checkForUpdate()` in update.ts for what "newer" means and how failures are handled. */
+  /**
+   * Fire-and-forget update check, run on startup and then every
+   * `UPDATE_CHECK_INTERVAL_MS` - see `checkForUpdate()` in update.ts for what
+   * "newer" means and how failures are handled. Skipped while a previous
+   * find is still being acted on (downloading, or ready to relaunch into),
+   * so it can't interrupt or reset that in-flight state; an "available"
+   * status not yet clicked keeps re-resolving to the same update, which is
+   * harmless, so it isn't skipped.
+   */
   private async runUpdateCheck() {
-    const info = await checkForUpdate();
-    if (!info) return;
-    this.state.updateInfo = info;
+    const phase = this.state.updateStatus?.phase;
+    if (phase === "downloading" || phase === "ready") return;
+    const update = await checkForUpdate();
+    if (!update) return;
+    this.pendingUpdate = update;
+    this.state.updateStatus = { phase: "available", version: update.version, body: update.body ?? null };
     this.notify();
+  }
+
+  /** Downloads and installs the update found by the last check, tracking progress in `state.updateStatus` for the sidebar icon. Leaves the new version installed but not yet running - `relaunchForUpdate()` switches into it. */
+  async installUpdate() {
+    const update = this.pendingUpdate;
+    if (!update || this.state.updateStatus?.phase !== "available") return;
+    const version = update.version;
+    let downloaded = 0;
+    let contentLength: number | null = null;
+    this.state.updateStatus = { phase: "downloading", version, downloaded, contentLength };
+    this.notify();
+    try {
+      await update.downloadAndInstall((event) => {
+        if (event.event === "Started") {
+          contentLength = event.data.contentLength ?? null;
+        } else if (event.event === "Progress") {
+          downloaded += event.data.chunkLength;
+        } else {
+          return;
+        }
+        const now = Date.now();
+        if (now - this.lastUpdateProgressNotify < 300) return;
+        this.lastUpdateProgressNotify = now;
+        this.state.updateStatus = { phase: "downloading", version, downloaded, contentLength };
+        this.notify();
+      });
+      this.state.updateStatus = { phase: "ready", version };
+    } catch (e) {
+      this.state.updateStatus = { phase: "error", message: errorMessage(e) };
+    }
+    this.notify();
+  }
+
+  /** Restarts the app into the version `installUpdate()` already downloaded and installed. */
+  async relaunchForUpdate() {
+    if (this.state.updateStatus?.phase !== "ready") return;
+    await relaunch();
+  }
+
+  /** Clears a failed download/install attempt and immediately re-checks, so a manual retry click doesn't have to wait for the next hourly check. */
+  retryUpdate() {
+    if (this.state.updateStatus?.phase !== "error") return;
+    this.state.updateStatus = null;
+    this.notify();
+    void this.runUpdateCheck();
   }
 
   private applyMibProfilesResponse(resp: MibProfilesResponse) {
