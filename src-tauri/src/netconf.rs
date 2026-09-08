@@ -1,20 +1,32 @@
 //! NETCONF client support (RFC 6241/6242), built on `russh` over SSH and `quick-xml` for framing
-//! and message parsing - the SSH/XML-shaped counterpart to `gnmi.rs`'s gRPC/protobuf one. Phase 1
-//! only, mirroring gnmi.rs's own scoping: `<hello>` capability exchange and a one-shot `<get>`,
-//! no `<get-config>`/`<edit-config>` and no notifications. Password authentication only, and
-//! every server host key is accepted without verification (see `Client::check_server_key`) -
-//! the SSH-transport counterpart to gNMI's "Skip Verify" TLS mode being the path of least
-//! friction for a Phase 1 browsing tool.
+//! and message parsing - the SSH/XML-shaped counterpart to `gnmi.rs`'s gRPC/protobuf one. Password
+//! authentication only, and every server host key is accepted without verification (see
+//! `Client::check_server_key`) - the SSH-transport counterpart to gNMI's "Skip Verify" TLS mode
+//! being the path of least friction for a browsing tool. No notifications yet.
 //!
-//! A NETCONF `<get>` is filtered by an XPath `select` expression built directly from the same
-//! `module-name:node-name`-qualified path a YANG tree node already carries (see `yang.rs`) - the
-//! same "browse the YANG tree, fetch by its path" flow gNMI uses, just carried over NETCONF's own
-//! filter mechanism. That requires each module-name qualifier in the path to be bound to its real
-//! XML namespace URI via an `xmlns:` declaration, which is why `get()` takes the active YANG
-//! profile's `module_namespaces` map (see `yang::YangParseResult`) - unlike gNMI, whose target
-//! resolves module-qualified path segments against its own loaded schema without any namespace
-//! plumbing from this app. A target that doesn't advertise the `:xpath` capability can still be
-//! browsed at the root (path `"/"` or empty, which omits the filter and fetches everything).
+//! Three operations, sharing one connect+`<hello>`+single-RPC pipeline (`exchange()`):
+//! - `get()` - a one-shot `<get>`, filtered by an XPath `select` expression built directly from
+//!   the same `module-name:node-name`-qualified path a YANG tree node already carries (see
+//!   `yang.rs`) - the same "browse the YANG tree, fetch by its path" flow gNMI uses, just carried
+//!   over NETCONF's own filter mechanism. That requires each module-name qualifier in the path to
+//!   be bound to its real XML namespace URI via an `xmlns:` declaration, which is why `get()`
+//!   takes the active YANG profile's `module_namespaces` map (see `yang::YangParseResult`) -
+//!   unlike gNMI, whose target resolves module-qualified path segments against its own loaded
+//!   schema without any namespace plumbing from this app. A target that doesn't advertise the
+//!   `:xpath` capability can still be browsed at the root (path `"/"` or empty, which omits the
+//!   filter and fetches everything).
+//! - `edit_config()` - sends a caller-supplied `<config>` payload as an `<edit-config>` against a
+//!   chosen target datastore (`running` or `candidate`), with an optional default-operation.
+//! - `raw_rpc()` - wraps a caller-supplied inner XML fragment directly in `<rpc>...</rpc>` and
+//!   sends it verbatim. This is deliberately how this app reaches a YANG-1.1 `<action>`, `<commit/>`,
+//!   `<validate>`, `<discard-changes/>`, `<lock>`/`<unlock>`, or any vendor RPC: modeling `rpc`/
+//!   `action`/`input` YANG statements into a proper schema-driven form (the way `get()`'s path is
+//!   driven by the parsed data-node tree) would need a substantial extension to `yang.rs`, which
+//!   doesn't parse those statements at all today. A raw-XML passthrough gets real work done now
+//!   without that upfront cost; a schema-driven form is a natural follow-up if it's worth it.
+//!
+//! `edit_config()` and `raw_rpc()` mutate the target, unlike `get()` - the frontend is expected to
+//! confirm with the user before calling either.
 
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader;
@@ -361,9 +373,10 @@ fn get_rpc_xml(path: &str, xpath_supported: bool, module_namespaces: &HashMap<St
     ))
 }
 
-/// Builds the full element tree of an `<rpc-reply>` message, then returns the children of its
-/// `<data>` element (an `<rpc-error>` reply is surfaced as `Err` instead).
-fn parse_get_reply(xml: &str) -> Result<Vec<NetconfNode>, String> {
+/// Builds the full element tree of an `<rpc-reply>` message and returns that `<rpc-reply>` node
+/// itself - its content varies by operation (`<data>` for `get`, `<ok/>` for most others). An
+/// `<rpc-error>` among its direct children is surfaced as `Err` instead.
+fn parse_rpc_reply(xml: &str) -> Result<NetconfNode, String> {
     struct Frame {
         name: String,
         children: Vec<NetconfNode>,
@@ -410,8 +423,69 @@ fn parse_get_reply(xml: &str) -> Result<Vec<NetconfNode>, String> {
             .unwrap_or_else(|| "target returned a NETCONF rpc-error".to_string());
         return Err(message);
     }
+    Ok(rpc_reply)
+}
+
+/// Returns the children of a `<get>` reply's `<data>` element (an `<rpc-error>` reply is surfaced
+/// as `Err`, via `parse_rpc_reply`).
+fn parse_get_reply(xml: &str) -> Result<Vec<NetconfNode>, String> {
+    let rpc_reply = parse_rpc_reply(xml)?;
     let data = rpc_reply.children.into_iter().find(|n| n.name == "data").ok_or("no <data> in NETCONF response")?;
     Ok(data.children)
+}
+
+/// Confirms a reply carries no `<rpc-error>`, for operations (`edit-config`, `raw_rpc`) whose
+/// successful reply is just `<ok/>` (or operation-specific data not worth modeling as a tree).
+fn ensure_rpc_ok(xml: &str) -> Result<(), String> {
+    parse_rpc_reply(xml).map(|_| ())
+}
+
+/// Confirms `xml` is well-formed by parsing it wrapped in a throwaway root element - used to
+/// reject a malformed `edit_config`/`raw_rpc` payload locally with a clear message, rather than
+/// sending broken XML to the target and getting back an opaque failure (or, worse, a NETCONF
+/// server that's lenient about framing but not content, and does something unintended with it).
+fn validate_well_formed_fragment(xml: &str) -> Result<(), String> {
+    let trimmed = xml.trim();
+    if trimmed.is_empty() {
+        return Err("payload is empty".to_string());
+    }
+    let wrapped = format!("<root>{trimmed}</root>");
+    let mut reader = Reader::from_str(&wrapped);
+    reader.config_mut().trim_text(true);
+    loop {
+        match reader.read_event() {
+            Ok(Event::Eof) => return Ok(()),
+            Ok(_) => {}
+            Err(e) => return Err(format!("malformed XML: {e}")),
+        }
+    }
+}
+
+/// Builds the `<rpc><edit-config>...</edit-config></rpc>` message. `target` must be `"running"` or
+/// `"candidate"`; `default_operation`, if given, must be `"merge"`, `"replace"`, or `"none"` (the
+/// only values RFC 6241 §7.2 defines). `config_xml` becomes the content of `<config>` verbatim -
+/// see this module's doc comment for why it's taken as raw XML rather than built from a schema.
+fn edit_config_rpc_xml(target: &str, default_operation: Option<&str>, config_xml: &str) -> Result<String, String> {
+    let target_elem = match target {
+        "running" | "candidate" => target,
+        other => return Err(format!("unknown edit-config target '{other}' - expected \"running\" or \"candidate\"")),
+    };
+    validate_well_formed_fragment(config_xml)?;
+    let default_operation_xml = match default_operation {
+        None => String::new(),
+        Some(op @ ("merge" | "replace" | "none")) => format!("<default-operation>{op}</default-operation>"),
+        Some(other) => return Err(format!("unknown default-operation '{other}' - expected \"merge\", \"replace\", or \"none\"")),
+    };
+    Ok(format!(
+        r#"<rpc message-id="1" xmlns="urn:ietf:params:xml:ns:netconf:base:1.0"><edit-config><target><{target_elem}/></target>{default_operation_xml}<config>{}</config></edit-config></rpc>"#,
+        config_xml.trim()
+    ))
+}
+
+/// Builds the `<rpc>{inner_xml}</rpc>` message for `raw_rpc()`.
+fn raw_rpc_xml(inner_xml: &str) -> Result<String, String> {
+    validate_well_formed_fragment(inner_xml)?;
+    Ok(format!(r#"<rpc message-id="1" xmlns="urn:ietf:params:xml:ns:netconf:base:1.0">{}</rpc>"#, inner_xml.trim()))
 }
 
 pub async fn capabilities(params: &NetconfConnectionParams) -> Result<NetconfCapabilities, String> {
@@ -424,7 +498,11 @@ pub async fn capabilities(params: &NetconfConnectionParams) -> Result<NetconfCap
     Ok(NetconfCapabilities { session_id, capabilities })
 }
 
-pub async fn get(params: &NetconfConnectionParams, path: &str, module_namespaces: &HashMap<String, String>) -> Result<NetconfTree, String> {
+/// Runs one connect + `<hello>` exchange + single-RPC round trip against `params`, returning the
+/// raw `<rpc-reply>` XML text. `build_rpc` receives the target's negotiated capabilities (so
+/// `get()` can check for `:xpath` support) and returns the `<rpc>...</rpc>` XML to send; an `Err`
+/// from it aborts (after politely closing the connection) before anything is sent.
+async fn exchange(params: &NetconfConnectionParams, build_rpc: impl FnOnce(&[String]) -> Result<String, String>) -> Result<String, String> {
     let (session, mut channel, mut leftover) = connect(params).await?;
     write_message(&channel, Framing::Eom, client_hello_xml()).await?;
     let hello = read_message(&mut channel, Framing::Eom, &mut leftover).await?;
@@ -432,9 +510,8 @@ pub async fn get(params: &NetconfConnectionParams, path: &str, module_namespaces
     let (capabilities, _session_id) = parse_hello(&hello_xml)?;
 
     let framing = if capabilities.iter().any(|c| c.contains("base:1.1")) { Framing::Chunked } else { Framing::Eom };
-    let xpath_supported = capabilities.iter().any(|c| c.contains("capability:xpath"));
 
-    let rpc_xml = match get_rpc_xml(path, xpath_supported, module_namespaces) {
+    let rpc_xml = match build_rpc(&capabilities) {
         Ok(xml) => xml,
         Err(e) => {
             close(session, channel).await;
@@ -444,9 +521,43 @@ pub async fn get(params: &NetconfConnectionParams, path: &str, module_namespaces
     write_message(&channel, framing, &rpc_xml).await?;
     let reply = read_message(&mut channel, framing, &mut leftover).await?;
     let reply_xml = String::from_utf8(reply).map_err(|e| format!("NETCONF response was not valid UTF-8: {e}"))?;
-    let roots = parse_get_reply(&reply_xml);
     close(session, channel).await;
-    Ok(NetconfTree { roots: roots?, timestamp: now_ms() })
+    Ok(reply_xml)
+}
+
+pub async fn get(params: &NetconfConnectionParams, path: &str, module_namespaces: &HashMap<String, String>) -> Result<NetconfTree, String> {
+    let reply_xml = exchange(params, |capabilities| {
+        let xpath_supported = capabilities.iter().any(|c| c.contains("capability:xpath"));
+        get_rpc_xml(path, xpath_supported, module_namespaces)
+    })
+    .await?;
+    Ok(NetconfTree { roots: parse_get_reply(&reply_xml)?, timestamp: now_ms() })
+}
+
+/// Sends `config_xml` as an `<edit-config>` against `target` ("running" or "candidate"), with an
+/// optional `default_operation` ("merge"/"replace"/"none"). Returns the raw `<rpc-reply>` XML on
+/// success (typically just `<ok/>`) for display - see this module's doc comment for why the
+/// payload is raw XML rather than schema-built, and why the caller should confirm with the user
+/// first, since unlike `get()` this mutates the target's configuration.
+pub async fn edit_config(
+    params: &NetconfConnectionParams,
+    target: &str,
+    default_operation: Option<&str>,
+    config_xml: &str,
+) -> Result<String, String> {
+    let reply_xml = exchange(params, |_capabilities| edit_config_rpc_xml(target, default_operation, config_xml)).await?;
+    ensure_rpc_ok(&reply_xml)?;
+    Ok(reply_xml)
+}
+
+/// Wraps `inner_xml` in `<rpc>...</rpc>` and sends it verbatim - the target may interpret it as a
+/// YANG-1.1 `<action>`, `<commit/>`, `<validate>`, a vendor RPC, or anything else the target
+/// accepts. Returns the raw `<rpc-reply>` XML on success. Like `edit_config()`, this can mutate
+/// the target - see this module's doc comment.
+pub async fn raw_rpc(params: &NetconfConnectionParams, inner_xml: &str) -> Result<String, String> {
+    let reply_xml = exchange(params, |_capabilities| raw_rpc_xml(inner_xml)).await?;
+    ensure_rpc_ok(&reply_xml)?;
+    Ok(reply_xml)
 }
 
 #[cfg(test)]
@@ -558,5 +669,80 @@ mod tests {
 </rpc-reply>"#;
         let err = parse_get_reply(xml).unwrap_err();
         assert_eq!(err, "no such element");
+    }
+
+    #[test]
+    fn ensure_rpc_ok_accepts_a_plain_ok_reply() {
+        let xml = r#"<rpc-reply xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" message-id="1"><ok/></rpc-reply>"#;
+        assert!(ensure_rpc_ok(xml).is_ok());
+    }
+
+    #[test]
+    fn ensure_rpc_ok_surfaces_an_rpc_error_the_same_way_as_get() {
+        let xml = r#"<rpc-reply xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" message-id="1">
+  <rpc-error>
+    <error-type>protocol</error-type>
+    <error-tag>operation-failed</error-tag>
+    <error-message>candidate datastore is locked</error-message>
+  </rpc-error>
+</rpc-reply>"#;
+        assert_eq!(ensure_rpc_ok(xml).unwrap_err(), "candidate datastore is locked");
+    }
+
+    #[test]
+    fn validate_well_formed_fragment_rejects_an_unclosed_tag() {
+        assert!(validate_well_formed_fragment("<system><hostname>router1</hostname>").is_err());
+    }
+
+    #[test]
+    fn validate_well_formed_fragment_rejects_an_empty_payload() {
+        assert!(validate_well_formed_fragment("   ").is_err());
+    }
+
+    #[test]
+    fn validate_well_formed_fragment_accepts_multiple_top_level_elements() {
+        // <config> (and an <rpc> body) can legally hold more than one top-level element, unlike a
+        // normal XML document - the throwaway <root> wrapper exists precisely to allow that.
+        assert!(validate_well_formed_fragment("<a/><b/>").is_ok());
+    }
+
+    #[test]
+    fn edit_config_rpc_xml_rejects_an_unknown_target() {
+        assert!(edit_config_rpc_xml("startup", None, "<a/>").is_err());
+    }
+
+    #[test]
+    fn edit_config_rpc_xml_rejects_an_unknown_default_operation() {
+        assert!(edit_config_rpc_xml("running", Some("delete"), "<a/>").is_err());
+    }
+
+    #[test]
+    fn edit_config_rpc_xml_rejects_a_malformed_config_payload() {
+        assert!(edit_config_rpc_xml("running", None, "<a><b></a>").is_err());
+    }
+
+    #[test]
+    fn edit_config_rpc_xml_builds_the_expected_message() {
+        let xml = edit_config_rpc_xml("candidate", Some("merge"), r#"<system xmlns="urn:example"><hostname>router1</hostname></system>"#).unwrap();
+        assert!(xml.contains("<target><candidate/></target>"));
+        assert!(xml.contains("<default-operation>merge</default-operation>"));
+        assert!(xml.contains(r#"<config><system xmlns="urn:example"><hostname>router1</hostname></system></config>"#));
+    }
+
+    #[test]
+    fn edit_config_rpc_xml_omits_default_operation_when_not_given() {
+        let xml = edit_config_rpc_xml("running", None, "<a/>").unwrap();
+        assert!(!xml.contains("default-operation"));
+    }
+
+    #[test]
+    fn raw_rpc_xml_wraps_the_payload_in_rpc_verbatim() {
+        let xml = raw_rpc_xml("<commit/>").unwrap();
+        assert_eq!(xml, r#"<rpc message-id="1" xmlns="urn:ietf:params:xml:ns:netconf:base:1.0"><commit/></rpc>"#);
+    }
+
+    #[test]
+    fn raw_rpc_xml_rejects_malformed_input() {
+        assert!(raw_rpc_xml("<commit>").is_err());
     }
 }

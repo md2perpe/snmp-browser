@@ -441,6 +441,28 @@ fn handle(state: &AppState, rt: &tokio::runtime::Runtime, cmd: &str, args: &Valu
             rt.block_on(netconf::get(&connection, &path, &parsed.module_namespaces)).map(|r| serde_json::to_value(&r).unwrap()).map_err(|e| (400, e))
         }
 
+        "netconf_edit_config" => {
+            let connection: netconf::NetconfConnectionParams = serde_json::from_value(
+                args.get("connection").cloned().ok_or((400, "missing 'connection'".to_string()))?,
+            )
+            .map_err(|e| (400, e.to_string()))?;
+            let target = args.get("target").and_then(Value::as_str).ok_or((400, "missing 'target'".to_string()))?.to_string();
+            let default_operation = args.get("defaultOperation").and_then(Value::as_str).map(str::to_string);
+            let config_xml = args.get("configXml").and_then(Value::as_str).ok_or((400, "missing 'configXml'".to_string()))?.to_string();
+            rt.block_on(netconf::edit_config(&connection, &target, default_operation.as_deref(), &config_xml))
+                .map(|r| serde_json::to_value(&r).unwrap())
+                .map_err(|e| (400, e))
+        }
+
+        "netconf_raw_rpc" => {
+            let connection: netconf::NetconfConnectionParams = serde_json::from_value(
+                args.get("connection").cloned().ok_or((400, "missing 'connection'".to_string()))?,
+            )
+            .map_err(|e| (400, e.to_string()))?;
+            let inner_xml = args.get("innerXml").and_then(Value::as_str).ok_or((400, "missing 'innerXml'".to_string()))?.to_string();
+            rt.block_on(netconf::raw_rpc(&connection, &inner_xml)).map(|r| serde_json::to_value(&r).unwrap()).map_err(|e| (400, e))
+        }
+
         "write_export_file" => {
             let path = args.get("path").and_then(Value::as_str).ok_or((400, "missing 'path'".to_string()))?.to_string();
             let data: Vec<u8> = serde_json::from_value(args.get("data").cloned().ok_or((400, "missing 'data'".to_string()))?)

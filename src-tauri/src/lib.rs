@@ -415,6 +415,25 @@ async fn netconf_get(state: State<'_, AppState>, connection: netconf::NetconfCon
     netconf::get(&connection, &path, &parsed.module_namespaces).await
 }
 
+/// Mutates the target's configuration - see `netconf::edit_config`'s doc comment. The frontend is
+/// expected to have already confirmed this with the user before calling it.
+#[tauri::command]
+async fn netconf_edit_config(
+    connection: netconf::NetconfConnectionParams,
+    target: String,
+    default_operation: Option<String>,
+    config_xml: String,
+) -> Result<String, String> {
+    netconf::edit_config(&connection, &target, default_operation.as_deref(), &config_xml).await
+}
+
+/// Sends a caller-supplied raw RPC (a YANG-1.1 action, `<commit/>`, a vendor RPC, ...) - see
+/// `netconf::raw_rpc`'s doc comment. Like `netconf_edit_config`, this can mutate the target.
+#[tauri::command]
+async fn netconf_raw_rpc(connection: netconf::NetconfConnectionParams, inner_xml: String) -> Result<String, String> {
+    netconf::raw_rpc(&connection, &inner_xml).await
+}
+
 /// Writes a table export (CSV or PNG, built client-side) to a path the user already chose via
 /// the native save dialog - a plain custom command rather than the fs plugin, since a
 /// user-picked absolute path doesn't fit that plugin's scope-based permission model.
@@ -479,6 +498,8 @@ pub fn run() {
             gnmi_get,
             netconf_capabilities,
             netconf_get,
+            netconf_edit_config,
+            netconf_raw_rpc,
             write_export_file
         ])
         .run(tauri::generate_context!())
