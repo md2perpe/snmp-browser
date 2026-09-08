@@ -49,16 +49,23 @@ pub struct YangParseResult {
     pub tree: Vec<YangTreeNode>,
     pub errors: Vec<FileErrors>,
     pub dir_files: Vec<DirFiles>,
+    /// Module name -> its declared `namespace` URI, for every parsed module that has one
+    /// (a `submodule` has none of its own - see `belongs-to`). Consumed by `netconf.rs` to bind
+    /// `xmlns` prefixes when turning a tree path (`module-name:node-name`) into an XPath filter,
+    /// the NETCONF-side counterpart to how gNMI just sends the module-qualified path as-is.
+    pub module_namespaces: HashMap<String, String>,
 }
 
 /// A parsed module or submodule, and the little bit of its own header this pass needs again
 /// later: its name (used both as its tree root label and as the qualifier on every path segment
-/// under it) and its `import`s (local prefix -> imported module name, needed to resolve a
-/// prefixed `uses`/`augment` reference back to the module that actually defines it).
+/// under it), its `import`s (local prefix -> imported module name, needed to resolve a
+/// prefixed `uses`/`augment` reference back to the module that actually defines it), and its
+/// declared `namespace` URI (empty for a submodule, which declares none of its own).
 struct ModuleInfo<'a> {
     name: String,
     root: Node<'a>,
     imports: HashMap<String, String>,
+    namespace: String,
     src: &'a [u8],
 }
 
@@ -255,18 +262,24 @@ pub fn parse_directories(dirs: &[String]) -> YangParseResult {
             }
         }
 
+        let namespace = find_child_by_kind(module_node, "namespace_stmt").and_then(|n| n.child_by_field_name("arg")).map(|n| arg_text(n, src)).unwrap_or_default();
+
         collect_groupings(module_node, src, &name, &mut groupings);
-        modules.push(ModuleInfo { name, root: module_node, imports, src });
+        modules.push(ModuleInfo { name, root: module_node, imports, namespace, src });
     }
 
     let mut tree = Vec::new();
+    let mut module_namespaces = HashMap::new();
     for m in &modules {
         let mut visiting = HashSet::new();
         let children = build_children(m.root, m.src, &m.name, "", &modules, &groupings, &mut visiting, 0);
         tree.push(YangTreeNode { id: format!("yang:{}", m.name), label: m.name.clone(), path: "/".to_string(), resolved: true, kind: NodeKind::Group, children });
+        if !m.namespace.is_empty() {
+            module_namespaces.insert(m.name.clone(), m.namespace.clone());
+        }
     }
 
-    YangParseResult { tree, errors, dir_files }
+    YangParseResult { tree, errors, dir_files, module_namespaces }
 }
 
 #[cfg(test)]

@@ -1,5 +1,6 @@
 pub mod gnmi;
 pub mod mib;
+pub mod netconf;
 pub mod settings;
 pub mod snmp;
 pub mod trap;
@@ -295,6 +296,21 @@ async fn gnmi_get(connection: gnmi::GnmiConnectionParams, path: String) -> Resul
     gnmi::get(&connection, &path).await
 }
 
+#[tauri::command]
+async fn netconf_capabilities(connection: netconf::NetconfConnectionParams) -> Result<netconf::NetconfCapabilities, String> {
+    netconf::capabilities(&connection).await
+}
+
+/// Unlike `gnmi_get`, this needs the active YANG profile's parsed modules (specifically their
+/// namespace URIs) to turn `path`'s `module-name:node-name` qualifiers into the target's
+/// `<filter type="xpath">` - see `netconf.rs`'s doc comment for why.
+#[tauri::command]
+async fn netconf_get(state: State<'_, AppState>, connection: netconf::NetconfConnectionParams, path: String) -> Result<netconf::NetconfTree, String> {
+    let dirs = state.settings.lock().unwrap().active_yang_profile().map(|p| p.dirs.clone()).unwrap_or_default();
+    let parsed = yang::parse_directories(&dirs);
+    netconf::get(&connection, &path, &parsed.module_namespaces).await
+}
+
 /// Writes a table export (CSV or PNG, built client-side) to a path the user already chose via
 /// the native save dialog - a plain custom command rather than the fs plugin, since a
 /// user-picked absolute path doesn't fit that plugin's scope-based permission model.
@@ -349,6 +365,8 @@ pub fn run() {
             local_ips,
             gnmi_capabilities,
             gnmi_get,
+            netconf_capabilities,
+            netconf_get,
             write_export_file
         ])
         .run(tauri::generate_context!())
