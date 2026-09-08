@@ -1,5 +1,5 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { el, startDrag, svgIcon } from "./dom";
+import { el, startDrag, startDragY, svgIcon } from "./dom";
 import { exportTableCsv, exportTablePng } from "./export";
 import { DEFAULT_COL_WIDTH } from "./mockData";
 import { computeStats, type Store } from "./state";
@@ -401,6 +401,68 @@ function renderSidebar(store: Store): HTMLElement {
           el("button", { class: "mib-dir-draft-cancel", title: "Cancel", onclick: () => store.cancelMibProfileDraft() }, ["×"]),
         ]);
 
+  // Which of the three collapsible sections is the last expanded one - it fills whatever space
+  // remains instead of using its own dragged height; see `sidebarTreeFlex()`.
+  const sectionsExpanded = [!store.state.mibSectionCollapsed, !store.state.yangSectionCollapsed, !store.state.netconfYangSectionCollapsed];
+  const lastExpanded = sectionsExpanded.lastIndexOf(true);
+
+  const mibExpanded = sectionsExpanded[0];
+  const mibStartHeight = store.state.mibTreeHeight;
+  const mibSectionBody: (HTMLElement | null)[] = !mibExpanded
+    ? []
+    : [
+        el("div", { class: "mib-dirs" }, [
+          profileRow,
+          renameRow,
+          profileDraftRow,
+          el("div", { class: "mib-dirs-head" }, [
+            el("div", { class: "mib-dirs-title" }, ["MIB Directories"]),
+            el(
+              "button",
+              {
+                class: "mib-dir-add",
+                title: "Add MIB directory",
+                onclick: () => {
+                  // addMibDir() runs synchronously up to its first `await` (only taken
+                  // on the native-picker path), so the draft input already exists
+                  // in the DOM by the time this call returns in browser mode.
+                  void store.addMibDir();
+                  document.querySelector<HTMLInputElement>(".snmp-dir-draft-input")?.focus();
+                },
+              },
+              ["+"],
+            ),
+          ]),
+          el("div", { class: "mib-dir-list" }, dirRows),
+          draftRow,
+        ]),
+        el("div", { class: "tree-mode-box" }, [
+          el(
+            "div",
+            { class: "tree-mode-toggle" },
+            [
+              { label: "Tree", value: false },
+              { label: "Tables", value: true },
+            ].map(({ label, value }) =>
+              el(
+                "button",
+                {
+                  class: "tree-mode-btn" + (store.state.tablesOnlyMode === value ? " active" : ""),
+                  onclick: () => store.setTablesOnlyMode(value),
+                },
+                [label],
+              ),
+            ),
+          ),
+        ]),
+        el(
+          "div",
+          { class: "tree", "data-preserve-scroll": "tree", style: { flex: sidebarTreeFlex(mibStartHeight, lastExpanded === 0) } },
+          visibleNodes.map(({ node, depth }) => renderTreeRow(store, node, depth, selectedNodeId)),
+        ),
+        lastExpanded === 0 ? null : renderSplitterH((e) => startDragY(e, (dy) => store.setMibTreeHeight(mibStartHeight + dy))),
+      ];
+
   return el("div", { class: "sidebar", style: { width: store.state.leftWidth + "px" } }, [
     el("div", { class: "sidebar-header" }, [
       el("button", { class: "icon-btn", title: "Hide sidebar", onclick: () => store.toggleLeft() }, [sidebarToggleIcon()]),
@@ -408,58 +470,10 @@ function renderSidebar(store: Store): HTMLElement {
       renderUpdateButton(store),
       el("button", { class: "icon-btn", title: "Theme", onclick: (e: MouseEvent) => openThemeMenu(store, e) }, [paletteIcon()]),
     ]),
-    el("div", { class: "sidebar-section-head" }, ["SNMP (MIB)"]),
-    el("div", { class: "mib-dirs" }, [
-      profileRow,
-      renameRow,
-      profileDraftRow,
-      el("div", { class: "mib-dirs-head" }, [
-        el("div", { class: "mib-dirs-title" }, ["MIB Directories"]),
-        el(
-          "button",
-          {
-            class: "mib-dir-add",
-            title: "Add MIB directory",
-            onclick: () => {
-              // addMibDir() runs synchronously up to its first `await` (only taken
-              // on the native-picker path), so the draft input already exists
-              // in the DOM by the time this call returns in browser mode.
-              void store.addMibDir();
-              document.querySelector<HTMLInputElement>(".snmp-dir-draft-input")?.focus();
-            },
-          },
-          ["+"],
-        ),
-      ]),
-      el("div", { class: "mib-dir-list" }, dirRows),
-      draftRow,
-    ]),
-    el("div", { class: "tree-mode-box" }, [
-      el(
-        "div",
-        { class: "tree-mode-toggle" },
-        [
-          { label: "Tree", value: false },
-          { label: "Tables", value: true },
-        ].map(({ label, value }) =>
-          el(
-            "button",
-            {
-              class: "tree-mode-btn" + (store.state.tablesOnlyMode === value ? " active" : ""),
-              onclick: () => store.setTablesOnlyMode(value),
-            },
-            [label],
-          ),
-        ),
-      ),
-    ]),
-    el(
-      "div",
-      { class: "tree", "data-preserve-scroll": "tree" },
-      visibleNodes.map(({ node, depth }) => renderTreeRow(store, node, depth, selectedNodeId)),
-    ),
-    ...renderYangSection(store),
-    ...renderNetconfYangSection(store),
+    sidebarSectionHead("SNMP (MIB)", !mibExpanded, () => store.toggleMibSectionCollapsed()),
+    ...mibSectionBody,
+    ...renderYangSection(store, lastExpanded === 1),
+    ...renderNetconfYangSection(store, lastExpanded === 2),
   ]);
 }
 
@@ -667,6 +681,27 @@ function renderCollapsedRail(store: Store): HTMLElement {
 
 function renderSplitter(onMouseDown: (e: MouseEvent) => void): HTMLElement {
   return el("div", { class: "splitter", onmousedown: onMouseDown }, [el("div", { class: "splitter-line" })]);
+}
+
+/** The vertical-drag counterpart to `renderSplitter`, between two resizable sidebar sections. */
+function renderSplitterH(onMouseDown: (e: MouseEvent) => void): HTMLElement {
+  return el("div", { class: "splitter-h", onmousedown: onMouseDown }, [el("div", { class: "splitter-h-line" })]);
+}
+
+/** A collapsible sidebar section's header row: a rotating caret plus its label, click anywhere on
+ * the row to toggle. Shared by the "SNMP (MIB)", "YANG (gNMI)", and "YANG (NETCONF)" sections. */
+function sidebarSectionHead(label: string, collapsed: boolean, onToggle: () => void): HTMLElement {
+  return el("div", { class: "sidebar-section-head", onclick: onToggle }, [
+    el("div", { class: "sidebar-section-caret", style: { transform: `rotate(${collapsed ? 0 : 90}deg)` } }, ["▶"]),
+    el("span", {}, [label]),
+  ]);
+}
+
+/** A resizable sidebar section's tree area's flex-basis: fills whatever space remains when it's
+ * the last expanded section (mirroring `PaneState.width`'s "null means flexible, but only ever for
+ * the actual last pane" convention), otherwise the explicit height its splitter was dragged to. */
+function sidebarTreeFlex(height: number, isLast: boolean): string {
+  return isLast ? "1 1 0%" : `0 0 ${height}px`;
 }
 
 function renderTabBar(store: Store, pane: PaneState): HTMLElement {
@@ -2057,8 +2092,11 @@ function renderYangTreeRow(store: Store, node: YangNode, depth: number): HTMLEle
 
 /** The YANG directories/profile UI plus the schema tree, shown in the left sidebar below the MIB
  * section - the gNMI counterpart to the MIB directory list and OID tree above it. Clicking a node
- * stages its path into whichever gNMI tab is currently active (see `Store.selectYangNode`). */
-function renderYangSection(store: Store): HTMLElement[] {
+ * stages its path into whichever gNMI tab is currently active (see `Store.selectYangNode`).
+ * `isLast` - whether this is the last expanded sidebar section - is threaded down to its tree
+ * area's flex-basis; see `sidebarTreeFlex()`. */
+function renderYangSection(store: Store, isLast: boolean): (HTMLElement | null)[] {
+  const collapsed = store.state.yangSectionCollapsed;
   const activeProfile = store.activeYangProfile();
   const errors = store.state.yangParseErrors;
   const dirRows: HTMLElement[] = (activeProfile?.dirs ?? []).flatMap((dir) => {
@@ -2224,9 +2262,13 @@ function renderYangSection(store: Store): HTMLElement[] {
         ]);
 
   const treeRows = store.yangTree.flatMap((n) => renderYangTreeRow(store, n, 0));
+  const startHeight = store.state.yangTreeHeight;
+
+  const head = sidebarSectionHead("YANG (gNMI)", collapsed, () => store.toggleYangSectionCollapsed());
+  if (collapsed) return [head];
 
   return [
-    el("div", { class: "sidebar-section-head" }, ["YANG (gNMI)"]),
+    head,
     el("div", { class: "mib-dirs" }, [
       profileRow,
       renameRow,
@@ -2251,9 +2293,10 @@ function renderYangSection(store: Store): HTMLElement[] {
     ]),
     el(
       "div",
-      { class: "tree", "data-preserve-scroll": "yangTree" },
+      { class: "tree", "data-preserve-scroll": "yangTree", style: { flex: sidebarTreeFlex(startHeight, isLast) } },
       treeRows.length ? treeRows : [el("div", { class: "table-empty" }, ["No YANG files found - add a directory above."])],
     ),
+    isLast ? null : renderSplitterH((e) => startDragY(e, (dy) => store.setYangTreeHeight(startHeight + dy))),
   ];
 }
 
@@ -2309,8 +2352,9 @@ function renderNetconfYangTreeRow(store: Store, node: YangNode, depth: number): 
 /** The NETCONF-side counterpart to `renderYangSection`, over its own separate profile/directory
  * state and schema tree (`netconfYang*`) - see `NetconfYangProfile`'s doc comment for why NETCONF
  * doesn't just reuse gNMI's YANG section. Clicking a node stages its path into whichever NETCONF
- * tab is currently active (see `Store.selectNetconfYangNode`). */
-function renderNetconfYangSection(store: Store): HTMLElement[] {
+ * tab is currently active (see `Store.selectNetconfYangNode`). `isLast` - see `renderYangSection`. */
+function renderNetconfYangSection(store: Store, isLast: boolean): (HTMLElement | null)[] {
+  const collapsed = store.state.netconfYangSectionCollapsed;
   const activeProfile = store.activeNetconfYangProfile();
   const errors = store.state.netconfYangParseErrors;
   const dirRows: HTMLElement[] = (activeProfile?.dirs ?? []).flatMap((dir) => {
@@ -2476,9 +2520,13 @@ function renderNetconfYangSection(store: Store): HTMLElement[] {
         ]);
 
   const treeRows = store.netconfYangTree.flatMap((n) => renderNetconfYangTreeRow(store, n, 0));
+  const startHeight = store.state.netconfYangTreeHeight;
+
+  const head = sidebarSectionHead("YANG (NETCONF)", collapsed, () => store.toggleNetconfYangSectionCollapsed());
+  if (collapsed) return [head];
 
   return [
-    el("div", { class: "sidebar-section-head" }, ["YANG (NETCONF)"]),
+    head,
     el("div", { class: "mib-dirs" }, [
       profileRow,
       renameRow,
@@ -2503,9 +2551,10 @@ function renderNetconfYangSection(store: Store): HTMLElement[] {
     ]),
     el(
       "div",
-      { class: "tree", "data-preserve-scroll": "netconfYangTree" },
+      { class: "tree", "data-preserve-scroll": "netconfYangTree", style: { flex: sidebarTreeFlex(startHeight, isLast) } },
       treeRows.length ? treeRows : [el("div", { class: "table-empty" }, ["No YANG files found - add a directory above."])],
     ),
+    isLast ? null : renderSplitterH((e) => startDragY(e, (dy) => store.setNetconfYangTreeHeight(startHeight + dy))),
   ];
 }
 

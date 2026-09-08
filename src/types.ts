@@ -391,6 +391,17 @@ export interface AppState {
   netconfYangParseErrors: FileErrors[];
   netconfYangParseErrorsOpen: boolean;
   selectedNetconfYangNodeId: string;
+  /** Whether the "SNMP (MIB)" sidebar section (profile/directories/tree) is collapsed to just its header. */
+  mibSectionCollapsed: boolean;
+  /** Explicit height (px) of the MIB tree area, dragged via the splitter below it. Ignored (the
+   * section fills whatever space remains instead) when this is the last expanded sidebar section -
+   * the same "explicit except for the trailing flexible one" convention `PaneState.width` uses. */
+  mibTreeHeight: number;
+  /** The gNMI/NETCONF YANG sections' counterparts to the two fields above. */
+  yangSectionCollapsed: boolean;
+  yangTreeHeight: number;
+  netconfYangSectionCollapsed: boolean;
+  netconfYangTreeHeight: number;
   leftWidth: number;
   leftCollapsed: boolean;
   panes: PaneState[];

@@ -62,6 +62,10 @@ const THEME_STORAGE_KEY = "snmpBrowserTheme";
 const LAST_ADDR_STORAGE_KEY = "snmpBrowserLastAddr";
 const DEFAULT_BENCHMARK_ITERATIONS = 10;
 const MAX_BENCHMARK_ITERATIONS = 1000;
+/** Starting height (px) of each resizable sidebar section's tree area - overridden by dragging its splitter. */
+const DEFAULT_SIDEBAR_SECTION_HEIGHT = 220;
+/** Floor a sidebar section's tree area can be dragged down to - short of 0, so its header and a sliver of content stay reachable. */
+const MIN_SIDEBAR_SECTION_HEIGHT = 60;
 
 /** The host address most recently used for a connection attempt, from either an SNMP query tab
  * or a gNMI tab - shared across both, so a new tab of either kind starts from wherever the user
@@ -212,6 +216,12 @@ export class Store {
       netconfYangParseErrors: [],
       netconfYangParseErrorsOpen: false,
       selectedNetconfYangNodeId: "",
+      mibSectionCollapsed: false,
+      mibTreeHeight: DEFAULT_SIDEBAR_SECTION_HEIGHT,
+      yangSectionCollapsed: false,
+      yangTreeHeight: DEFAULT_SIDEBAR_SECTION_HEIGHT,
+      netconfYangSectionCollapsed: false,
+      netconfYangTreeHeight: DEFAULT_SIDEBAR_SECTION_HEIGHT,
       leftWidth: 330,
       leftCollapsed: false,
       panes: [{ id: "p1", width: null, activeTabId: null, tabs: [] }],
@@ -679,6 +689,36 @@ export class Store {
 
   setLeftWidth(width: number) {
     this.state.leftWidth = Math.min(520, Math.max(220, width));
+    this.notify();
+  }
+
+  toggleMibSectionCollapsed() {
+    this.state.mibSectionCollapsed = !this.state.mibSectionCollapsed;
+    this.notify();
+  }
+
+  setMibTreeHeight(height: number) {
+    this.state.mibTreeHeight = Math.max(MIN_SIDEBAR_SECTION_HEIGHT, height);
+    this.notify();
+  }
+
+  toggleYangSectionCollapsed() {
+    this.state.yangSectionCollapsed = !this.state.yangSectionCollapsed;
+    this.notify();
+  }
+
+  setYangTreeHeight(height: number) {
+    this.state.yangTreeHeight = Math.max(MIN_SIDEBAR_SECTION_HEIGHT, height);
+    this.notify();
+  }
+
+  toggleNetconfYangSectionCollapsed() {
+    this.state.netconfYangSectionCollapsed = !this.state.netconfYangSectionCollapsed;
+    this.notify();
+  }
+
+  setNetconfYangTreeHeight(height: number) {
+    this.state.netconfYangTreeHeight = Math.max(MIN_SIDEBAR_SECTION_HEIGHT, height);
     this.notify();
   }
 
