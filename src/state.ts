@@ -15,6 +15,10 @@ import type {
   MibNode,
   MibProfile,
   MibProfilesResponse,
+  NetconfCapabilities,
+  NetconfConnectionParams,
+  NetconfNode,
+  NetconfTabState,
   PaneState,
   ParseResult,
   Row,
@@ -44,6 +48,9 @@ const DEFAULT_TRAP_PORT = "162";
 const DEFAULT_GNMI_PORT = "57400";
 const DEFAULT_GNMI_USERNAME = "admin";
 const DEFAULT_GNMI_PASSWORD = "admin";
+const DEFAULT_NETCONF_PORT = "830";
+const DEFAULT_NETCONF_USERNAME = "admin";
+const DEFAULT_NETCONF_PASSWORD = "admin";
 const TRAP_POLL_INTERVAL_MS = 1000;
 /** How often to re-check for a new release - the app is commonly left open for a long time, so a startup-only check would miss releases that come out mid-session. */
 const UPDATE_CHECK_INTERVAL_MS = 60 * 60 * 1000;
@@ -376,6 +383,29 @@ export class Store {
     };
   }
 
+  /** A NETCONF tab starts with blank connection fields, same shape as `makeGnmiTab` - the address
+   * defaults to whatever was last used (SNMP, gNMI, or NETCONF), the rest to this deployment's
+   * usual lab-device shape. The path defaults to "/" so Get is immediately usable to fetch the
+   * whole datastore, same as a fresh gNMI tab. */
+  makeNetconfTab(id: string, opts: Partial<NetconfTabState> = {}): NetconfTabState {
+    return {
+      kind: "netconf",
+      id,
+      hostAddr: this.lastUsedAddr,
+      hostPort: DEFAULT_NETCONF_PORT,
+      username: DEFAULT_NETCONF_USERNAME,
+      password: DEFAULT_NETCONF_PASSWORD,
+      path: "/",
+      capabilities: null,
+      result: null,
+      expandedIds: {},
+      loading: false,
+      fetchError: null,
+      lastFetch: "",
+      ...opts,
+    };
+  }
+
   // ---------- lookups ----------
 
   getPane(id: string): PaneState | undefined {
@@ -428,6 +458,15 @@ export class Store {
     if (!pane) return;
     const tab = this.getPaneActiveTab(pane);
     if (!tab || tab.kind !== "gnmi") return;
+    this.applyPatch(tab, patch);
+    this.notify();
+  }
+
+  updateActiveNetconfTabInPane(paneId: string, patch: Patch<NetconfTabState>) {
+    const pane = this.getPane(paneId);
+    if (!pane) return;
+    const tab = this.getPaneActiveTab(pane);
+    if (!tab || tab.kind !== "netconf") return;
     this.applyPatch(tab, patch);
     this.notify();
   }
@@ -520,6 +559,17 @@ export class Store {
     this.notify();
   }
 
+  /** Opens a new, blank NETCONF browser tab in the given pane - the NETCONF counterpart to `openGnmiTab`. */
+  openNetconfTab(paneId: string) {
+    const pane = this.getPane(paneId);
+    if (!pane) return;
+    const tab = this.makeNetconfTab("tab" + Date.now());
+    pane.tabs.push(tab);
+    pane.activeTabId = tab.id;
+    this.state.activePaneId = paneId;
+    this.notify();
+  }
+
   closeTabInPane(paneId: string, tabId: string) {
     const pane = this.getPane(paneId);
     if (!pane) return;
@@ -531,8 +581,9 @@ export class Store {
     }
     // The walk in flight can't be aborted, but this stops the run from starting another.
     if (tab?.kind === "benchmark" && tab.running) tab.cancelling = true;
-    // gNMI Phase 1's Capabilities/Get calls are one-shot, so a "gnmi" tab has no backend
-    // session to tear down here (unlike trap/benchmark above) - that arrives with Subscribe.
+    // gNMI/NETCONF Phase 1's Capabilities/Get calls are one-shot, so neither tab kind has a
+    // backend session to tear down here (unlike trap/benchmark above) - that arrives with
+    // gNMI Subscribe or a NETCONF persistent-connection mode, neither implemented yet.
     pane.tabs = pane.tabs.filter((t) => t.id !== tabId);
     if (pane.activeTabId === tabId) {
       pane.activeTabId = pane.tabs.length ? pane.tabs[pane.tabs.length - 1].id : null;
@@ -551,8 +602,8 @@ export class Store {
     if (newTab?.kind === "trap") newTab = { ...newTab, running: false, boundAddr: "", startError: null, events: [], lastSeq: 0, expandedSeq: null };
     // Likewise, a duplicated benchmark tab doesn't inherit the run loop backing it.
     if (newTab?.kind === "benchmark") newTab = { ...newTab, running: false, cancelling: false };
-    // A duplicated gnmi tab needs no such reset in Phase 1 - its Capabilities/Get calls are
-    // one-shot, not a backing session like trap/benchmark above.
+    // A duplicated gnmi/netconf tab needs no such reset in Phase 1 - its Capabilities/Get calls
+    // are one-shot, not a backing session like trap/benchmark above.
     pane.width = 620;
     const newPane: PaneState = { id: "pane" + Date.now(), width: null, tabs: newTab ? [newTab] : [], activeTabId: newTab?.id ?? null };
     this.state.panes.push(newPane);
@@ -571,7 +622,7 @@ export class Store {
         if (t.running) void invoke("stop_trap_listener", { id: t.id });
       }
       if (t.kind === "benchmark" && t.running) t.cancelling = true;
-      // gNMI Phase 1 has no backend session to stop here either - see closeTabInPane.
+      // gNMI/NETCONF Phase 1 have no backend session to stop here either - see closeTabInPane.
     });
     this.state.panes = this.state.panes.filter((p) => p.id !== paneId);
     if (this.state.panes.length === 1) this.state.panes[0].width = null;
@@ -811,18 +862,25 @@ export class Store {
     this.notify();
   }
 
-  // ---------- YANG directories / profiles (gNMI schema tree) ----------
+  // ---------- YANG directories / profiles (gNMI/NETCONF schema tree) ----------
 
-  /** Single-click: highlight the row, and - if the active pane's active tab is a gNMI tab - stage
-   * the node's path there too, mirroring the sidebar's role as a browsing aid for whichever gNMI
-   * tab is currently in view. A no-op on the tab when it isn't a gNMI tab (or the node has no
-   * usable path, e.g. an unresolved `uses` placeholder). */
+  /** Single-click: highlight the row, and stage the node's path into whichever gNMI-or-NETCONF
+   * tab is currently active in the active pane - mirroring the sidebar's role as a shared browsing
+   * aid for either protocol. Defaults to a gNMI tab when the active tab is neither (including "no
+   * tab open"), matching this method's behavior before NETCONF existed. A no-op on the path update
+   * when the node has no usable path (e.g. an unresolved `uses` placeholder). */
   selectYangNode(node: YangNode) {
     this.state.selectedYangNodeId = node.id;
-    if (node.path) {
-      this.updateActiveGnmiTabInPane(this.state.activePaneId, { path: node.path });
-    } else {
+    if (!node.path) {
       this.notify();
+      return;
+    }
+    const pane = this.getPane(this.state.activePaneId);
+    const tab = pane && this.getPaneActiveTab(pane);
+    if (tab?.kind === "netconf") {
+      this.updateActiveNetconfTabInPane(this.state.activePaneId, { path: node.path });
+    } else {
+      this.updateActiveGnmiTabInPane(this.state.activePaneId, { path: node.path });
     }
   }
 
@@ -835,6 +893,20 @@ export class Store {
     const pane = this.getPane(this.state.activePaneId);
     if (!pane) return;
     const tab = this.makeGnmiTab("tab" + Date.now(), { path: node.path });
+    pane.tabs.push(tab);
+    pane.activeTabId = tab.id;
+    this.closeTreeContextMenu();
+    this.notify();
+  }
+
+  /** The NETCONF counterpart to `openYangNodeInNewTab`, reached from the tree's context menu
+   * rather than a double-click (which stays gNMI, to keep the existing shortcut unambiguous). */
+  openYangNodeInNewNetconfTab(node: YangNode) {
+    if (!node.path) return;
+    this.state.selectedYangNodeId = node.id;
+    const pane = this.getPane(this.state.activePaneId);
+    if (!pane) return;
+    const tab = this.makeNetconfTab("tab" + Date.now(), { path: node.path });
     pane.tabs.push(tab);
     pane.activeTabId = tab.id;
     this.closeTreeContextMenu();
@@ -1432,6 +1504,76 @@ export class Store {
     this.notify();
     try {
       const result = await invoke<{ roots: GnmiNode[] }>("gnmi_get", { connection: this.gnmiConnectionOf(tab), path: tab.path });
+      tab.result = result.roots;
+      tab.expandedIds = {};
+      tab.fetchError = null;
+    } catch (e) {
+      tab.fetchError = errorMessage(e);
+    }
+    tab.loading = false;
+    tab.lastFetch = new Date().toLocaleTimeString();
+    this.notify();
+  }
+
+  // ---------- NETCONF tab ----------
+
+  toggleNetconfNodeExpanded(paneId: string, nodeKey: string) {
+    this.updateActiveNetconfTabInPane(paneId, (t) => ({ expandedIds: { ...t.expandedIds, [nodeKey]: !t.expandedIds[nodeKey] } }));
+  }
+
+  /** A NETCONF tab's connection fields in the shape the backend's `netconf_capabilities`/`netconf_get` commands expect. */
+  private netconfConnectionOf(tab: NetconfTabState): NetconfConnectionParams {
+    return { hostAddr: tab.hostAddr, hostPort: tab.hostPort, username: tab.username, password: tab.password };
+  }
+
+  /** Whether a NETCONF tab's connection fields are filled in enough to attempt a call - unlike
+   * gNMI, username and password are both required, since Phase 1 only supports SSH password auth. */
+  hasCompleteNetconfConnection(tab: NetconfTabState): boolean {
+    return !!tab.hostAddr.trim() && !!tab.hostPort.trim() && !!tab.username.trim() && !!tab.password;
+  }
+
+  async runNetconfCapabilities(paneId: string) {
+    const pane = this.getPane(paneId);
+    const tab = pane && this.getPaneActiveTab(pane);
+    if (!tab || tab.kind !== "netconf") return;
+    if (!this.hasCompleteNetconfConnection(tab)) {
+      tab.fetchError = "Fill in the target address, port, username, and password first";
+      this.notify();
+      return;
+    }
+    this.noteUsedAddr(tab.hostAddr);
+    tab.loading = true;
+    this.notify();
+    try {
+      tab.capabilities = await invoke<NetconfCapabilities>("netconf_capabilities", { connection: this.netconfConnectionOf(tab) });
+      tab.fetchError = null;
+    } catch (e) {
+      tab.fetchError = errorMessage(e);
+    }
+    tab.loading = false;
+    tab.lastFetch = new Date().toLocaleTimeString();
+    this.notify();
+  }
+
+  async runNetconfGet(paneId: string) {
+    const pane = this.getPane(paneId);
+    const tab = pane && this.getPaneActiveTab(pane);
+    if (!tab || tab.kind !== "netconf") return;
+    if (!this.hasCompleteNetconfConnection(tab)) {
+      tab.fetchError = "Fill in the target address, port, username, and password first";
+      this.notify();
+      return;
+    }
+    if (!tab.path.trim()) {
+      tab.fetchError = "Enter a NETCONF path first";
+      this.notify();
+      return;
+    }
+    this.noteUsedAddr(tab.hostAddr);
+    tab.loading = true;
+    this.notify();
+    try {
+      const result = await invoke<{ roots: NetconfNode[] }>("netconf_get", { connection: this.netconfConnectionOf(tab), path: tab.path });
       tab.result = result.roots;
       tab.expandedIds = {};
       tab.fetchError = null;

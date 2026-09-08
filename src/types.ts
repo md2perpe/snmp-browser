@@ -228,6 +228,50 @@ export interface GnmiCapabilities {
   supportedModels: { name: string; organization: string; version: string }[];
 }
 
+/** The connection half of a NETCONF request (SSH, password auth only in Phase 1), as the Rust `netconf::NetconfConnectionParams` expects it. */
+export interface NetconfConnectionParams {
+  hostAddr: string;
+  hostPort: string;
+  username: string;
+  password: string;
+}
+
+/** One element of a decoded NETCONF `<get>` reply tree - the NETCONF-side counterpart to `GnmiNode`. */
+export interface NetconfNode {
+  name: string;
+  value: string | null;
+  children: NetconfNode[];
+}
+
+/** A target's advertised NETCONF session id and capability URIs, from the `<hello>` exchange. */
+export interface NetconfCapabilities {
+  sessionId: string;
+  capabilities: string[];
+}
+
+/** A pane tab dedicated to browsing a NETCONF target over SSH: a `<hello>` capabilities check and
+ * one-shot `<get>` requests filtered by an XPath path staged from the shared YANG tree - the
+ * NETCONF counterpart to `GnmiTabState`. */
+export interface NetconfTabState {
+  kind: "netconf";
+  id: string;
+  hostAddr: string;
+  hostPort: string;
+  username: string;
+  password: string;
+  /** Manually-typed XPath-style path, e.g. "/interfaces/interface[name='eth0']"; "/" fetches the whole datastore. */
+  path: string;
+  /** Last successful `<hello>` capabilities, or null before the first call. */
+  capabilities: NetconfCapabilities | null;
+  /** Last successful `<get>` result's roots, or null before the first fetch. */
+  result: NetconfNode[] | null;
+  /** Tree-expand state for `result`, keyed by each node's path-so-far. */
+  expandedIds: Record<string, boolean>;
+  loading: boolean;
+  fetchError: string | null;
+  lastFetch: string;
+}
+
 export interface TrapVarbind {
   oid: string;
   /** MIB-resolved name (e.g. "ifDescr.3"), or the same as `oid` when nothing matched. */
@@ -285,7 +329,7 @@ export interface TrapTabState {
   useDisplayHints: boolean;
 }
 
-export type AnyTabState = TabState | TrapTabState | BenchmarkTabState | GnmiTabState;
+export type AnyTabState = TabState | TrapTabState | BenchmarkTabState | GnmiTabState | NetconfTabState;
 
 export interface PaneState {
   id: string;

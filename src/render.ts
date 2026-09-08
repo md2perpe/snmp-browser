@@ -9,6 +9,8 @@ import type {
   GnmiNode,
   GnmiTabState,
   MibNode,
+  NetconfNode,
+  NetconfTabState,
   NodeType,
   PaneState,
   Row,
@@ -52,6 +54,13 @@ function trapListenerIcon(): SVGSVGElement {
 function gnmiTabIcon(): SVGSVGElement {
   return svgIcon(
     '<circle cx="5" cy="6" r="2.5"/><circle cx="19" cy="6" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="M7 7l3 8"/><path d="M17 7l-3 8"/>',
+  );
+}
+
+/** Terminal icon (SSH transport), used for the "new NETCONF tab" action. */
+function netconfTabIcon(): SVGSVGElement {
+  return svgIcon(
+    '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l4 3-4 3"/><path d="M13 15h4"/>',
   );
 }
 
@@ -513,7 +522,7 @@ function mibTreeContextMenuItems(store: Store, nodeId: string): HTMLElement[] {
 }
 
 /** The YANG-tree counterpart to `mibTreeContextMenuItems`. No benchmark item - walk timing is
- * SNMP-only (see `snmp::walk_timed`); gNMI has no equivalent yet. */
+ * SNMP-only (see `snmp::walk_timed`); gNMI/NETCONF have no equivalent yet. */
 function yangTreeContextMenuItems(store: Store, nodeId: string): HTMLElement[] {
   const node = store.findYangNode(store.yangTree, nodeId);
 
@@ -537,7 +546,10 @@ function yangTreeContextMenuItems(store: Store, nodeId: string): HTMLElement[] {
   if (node && node.path) {
     items.push(
       el("button", { class: "context-menu-item", onclick: () => store.openYangNodeInNewTab(node) }, [
-        `Open "${node.label}" in new tab`,
+        `Open "${node.label}" in new gNMI tab`,
+      ]),
+      el("button", { class: "context-menu-item", onclick: () => store.openYangNodeInNewNetconfTab(node) }, [
+        `Open "${node.label}" in new NETCONF tab`,
       ]),
     );
   }
@@ -636,6 +648,9 @@ function renderTabBar(store: Store, pane: PaneState): HTMLElement {
     } else if (tab.kind === "gnmi") {
       label = "gNMI · " + (tab.hostAddr || "(no target)");
       dotClass += tab.fetchError ? " error" : "";
+    } else if (tab.kind === "netconf") {
+      label = "NETCONF · " + (tab.hostAddr || "(no target)");
+      dotClass += tab.fetchError ? " error" : "";
     } else {
       const host = store.hostProfiles.find((h) => h.id === tab.hostId);
       label = (host ? host.label : tab.hostAddr || "(no address)") + " · " + tab.selectedNode;
@@ -681,6 +696,7 @@ function renderTabBar(store: Store, pane: PaneState): HTMLElement {
       [trapListenerIcon()],
     ),
     el("button", { class: "pane-action", title: "New gNMI tab", onclick: () => store.openGnmiTab(pane.id) }, [gnmiTabIcon()]),
+    el("button", { class: "pane-action", title: "New NETCONF tab", onclick: () => store.openNetconfTab(pane.id) }, [netconfTabIcon()]),
     el("div", { class: "tab-bar-spacer" }),
     canSplit ? el("button", { class: "pane-action", title: "Split right", onclick: () => store.splitPane(pane.id) }, ["⊟"]) : null,
     canClosePane ? el("button", { class: "pane-action", title: "Close group", onclick: () => store.closePane(pane.id) }, ["✕"]) : null,
@@ -1209,6 +1225,8 @@ function renderPane(store: Store, pane: PaneState, isLast: boolean): HTMLElement
     body = renderBenchmarkPane(store, pane, tab);
   } else if (tab.kind === "gnmi") {
     body = renderGnmiPane(store, pane, tab);
+  } else if (tab.kind === "netconf") {
+    body = renderNetconfPane(store, pane, tab);
   } else {
     body = [renderToolbar(store, pane, tab), renderTableToolbar(store, pane, tab), renderTable(store, pane, tab), renderStatusBar(tab)];
   }
@@ -2003,8 +2021,9 @@ function renderYangTreeRow(store: Store, node: YangNode, depth: number): HTMLEle
 }
 
 /** The YANG directories/profile UI plus the schema tree, shown in the left sidebar below the MIB
- * section - the gNMI counterpart to the MIB directory list and OID tree above it. Clicking a node
- * stages its path into whichever gNMI tab is currently active (see `Store.selectYangNode`). */
+ * section - the gNMI/NETCONF counterpart to the MIB directory list and OID tree above it, shared
+ * by both protocols since both are YANG-modeled. Clicking a node stages its path into whichever
+ * gNMI-or-NETCONF tab is currently active (see `Store.selectYangNode`). */
 function renderYangSection(store: Store): HTMLElement[] {
   const activeProfile = store.activeYangProfile();
   const errors = store.state.yangParseErrors;
@@ -2173,7 +2192,7 @@ function renderYangSection(store: Store): HTMLElement[] {
   const treeRows = store.yangTree.flatMap((n) => renderYangTreeRow(store, n, 0));
 
   return [
-    el("div", { class: "sidebar-section-head" }, ["YANG (gNMI)"]),
+    el("div", { class: "sidebar-section-head" }, ["YANG (gNMI / NETCONF)"]),
     el("div", { class: "mib-dirs" }, [
       profileRow,
       renameRow,
@@ -2206,6 +2225,176 @@ function renderYangSection(store: Store): HTMLElement[] {
 
 function renderGnmiPane(store: Store, pane: PaneState, tab: GnmiTabState): HTMLElement[] {
   return [renderGnmiToolbar(store, pane, tab), renderGnmiBody(store, pane, tab)];
+}
+
+/** The NETCONF-tab counterpart to `renderGnmiToolbar`: address/port/username/password (SSH,
+ * password auth only in Phase 1 - see `netconf.rs`) instead of gNMI's address/port/TLS/username/
+ * password, otherwise the same Capabilities-button-plus-path-and-Get-row shape. */
+function renderNetconfToolbar(store: Store, pane: PaneState, tab: NetconfTabState): HTMLElement {
+  const fields: HTMLElement[] = [
+    el("div", { class: "field" }, [
+      el("label", { class: "field-label" }, ["Address"]),
+      el("input", {
+        class: "field-input field-addr field-mono",
+        value: tab.hostAddr,
+        disabled: tab.loading,
+        "data-focus-key": `netconf:${tab.id}:addr`,
+        oninput: (e: Event) => store.updateActiveNetconfTabInPane(pane.id, { hostAddr: (e.target as HTMLInputElement).value }),
+      }),
+    ]),
+    el("div", { class: "field" }, [
+      el("label", { class: "field-label" }, ["Port"]),
+      el("input", {
+        class: "field-input field-port field-mono",
+        value: tab.hostPort,
+        disabled: tab.loading,
+        "data-focus-key": `netconf:${tab.id}:port`,
+        oninput: (e: Event) => store.updateActiveNetconfTabInPane(pane.id, { hostPort: (e.target as HTMLInputElement).value }),
+      }),
+    ]),
+    el("div", { class: "field" }, [
+      el("label", { class: "field-label" }, ["Username"]),
+      el("input", {
+        class: "field-input field-v3-user",
+        value: tab.username,
+        disabled: tab.loading,
+        "data-focus-key": `netconf:${tab.id}:username`,
+        oninput: (e: Event) => store.updateActiveNetconfTabInPane(pane.id, { username: (e.target as HTMLInputElement).value }),
+      }),
+    ]),
+    el("div", { class: "field" }, [
+      el("label", { class: "field-label" }, ["Password"]),
+      el("input", {
+        type: "password",
+        class: "field-input field-v3-secret",
+        value: tab.password,
+        disabled: tab.loading,
+        "data-focus-key": `netconf:${tab.id}:password`,
+        oninput: (e: Event) => store.updateActiveNetconfTabInPane(pane.id, { password: (e.target as HTMLInputElement).value }),
+      }),
+    ]),
+  ];
+
+  const canRun = store.hasCompleteNetconfConnection(tab);
+  const runDisabledReason = canRun ? "" : "Fill in the target address, port, username, and password first";
+  fields.push(el("div", { class: "spacer" }));
+  fields.push(
+    el(
+      "button",
+      {
+        class: "toolbar-btn",
+        disabled: !canRun || tab.loading,
+        title: runDisabledReason,
+        onclick: () => void store.runNetconfCapabilities(pane.id),
+      },
+      ["Capabilities"],
+    ),
+  );
+
+  const pathRow = el("div", { class: "toolbar-row" }, [
+    el("div", { class: "field", style: { flex: "1" } }, [
+      el("label", { class: "field-label" }, ["Path"]),
+      el("input", {
+        class: "field-input field-mono",
+        style: { width: "100%" },
+        placeholder: "/interfaces/interface[name='eth0']",
+        value: tab.path,
+        disabled: tab.loading,
+        "data-focus-key": `netconf:${tab.id}:path`,
+        oninput: (e: Event) => store.updateActiveNetconfTabInPane(pane.id, { path: (e.target as HTMLInputElement).value }),
+      }),
+    ]),
+    el(
+      "button",
+      {
+        class: "split-btn-main",
+        style: { borderRadius: "7px", alignSelf: "flex-end", height: "28px" },
+        disabled: !canRun || tab.loading || !tab.path.trim(),
+        title: runDisabledReason,
+        onclick: () => void store.runNetconfGet(pane.id),
+      },
+      [tab.loading ? "Fetching…" : "Get"],
+    ),
+  ]);
+
+  return el("div", { class: "toolbar" }, [el("div", { class: "toolbar-row" }, fields), pathRow]);
+}
+
+/** Stable identity for a NETCONF result node's expand/collapse state, mirroring `gnmiNodeKey`. */
+function netconfNodeKey(parentKey: string, node: NetconfNode): string {
+  return parentKey ? `${parentKey}/${node.name}` : node.name;
+}
+
+function renderNetconfNode(store: Store, pane: PaneState, tab: NetconfTabState, node: NetconfNode, parentKey: string, depth: number): HTMLElement[] {
+  const key = netconfNodeKey(parentKey, node);
+  const hasChildren = node.children.length > 0;
+  const expanded = !!tab.expandedIds[key];
+  const row = el(
+    "div",
+    {
+      class: "gnmi-tree-row",
+      style: { paddingLeft: depth * 16 + 2 + "px" },
+      title: key,
+      onclick: hasChildren ? () => store.toggleNetconfNodeExpanded(pane.id, key) : undefined,
+    },
+    [
+      el(
+        "div",
+        {
+          class: "gnmi-tree-caret",
+          style: { visibility: hasChildren ? "visible" : "hidden", transform: `rotate(${hasChildren && expanded ? 90 : 0}deg)` },
+          onclick: hasChildren
+            ? (e: MouseEvent) => {
+                e.stopPropagation();
+                store.toggleNetconfNodeExpanded(pane.id, key);
+              }
+            : undefined,
+        },
+        ["▶"],
+      ),
+      gnmiNodeIcon(hasChildren),
+      el("span", { class: "gnmi-tree-name" }, [node.name]),
+      node.value != null ? el("span", { class: "gnmi-tree-value" }, [node.value]) : null,
+      copyButton("tree-copy-btn", node.value ?? node.name, `Copy ${node.value != null ? "value" : "name"}`),
+    ],
+  );
+  const out: HTMLElement[] = [row];
+  if (hasChildren && expanded) {
+    for (const child of node.children) out.push(...renderNetconfNode(store, pane, tab, child, key, depth + 1));
+  }
+  return out;
+}
+
+function renderNetconfCapabilities(caps: NonNullable<NetconfTabState["capabilities"]>): HTMLElement {
+  return el("div", { class: "gnmi-caps" }, [
+    el("div", { class: "gnmi-caps-row" }, [el("span", { class: "gnmi-caps-label" }, ["Session ID"]), caps.sessionId || "(none reported)"]),
+    el("div", { class: "gnmi-caps-row" }, [el("span", { class: "gnmi-caps-label" }, ["Capabilities"]), String(caps.capabilities.length)]),
+    el(
+      "div",
+      { class: "gnmi-caps-models" },
+      caps.capabilities.map((c) => el("div", { class: "gnmi-caps-model" }, [c])),
+    ),
+  ]);
+}
+
+function renderNetconfBody(store: Store, pane: PaneState, tab: NetconfTabState): HTMLElement {
+  if (tab.fetchError) {
+    return el("div", { class: "table-scroll" }, [el("div", { class: "table-empty" }, [tab.fetchError])]);
+  }
+  if (tab.result) {
+    const rows = tab.result.flatMap((n) => renderNetconfNode(store, pane, tab, n, "", 0));
+    return el("div", { class: "table-scroll" }, [el("div", { class: "gnmi-tree" }, rows)]);
+  }
+  if (tab.capabilities) {
+    return el("div", { class: "table-scroll" }, [renderNetconfCapabilities(tab.capabilities)]);
+  }
+  return el("div", { class: "table-scroll" }, [
+    el("div", { class: "table-empty" }, ["Enter a target and path, then click Get - or click Capabilities to see what the target supports."]),
+  ]);
+}
+
+function renderNetconfPane(store: Store, pane: PaneState, tab: NetconfTabState): HTMLElement[] {
+  return [renderNetconfToolbar(store, pane, tab), renderNetconfBody(store, pane, tab)];
 }
 
 function renderPaneGroup(store: Store): HTMLElement {
