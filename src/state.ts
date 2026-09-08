@@ -19,6 +19,8 @@ import type {
   NetconfConnectionParams,
   NetconfNode,
   NetconfTabState,
+  NetconfYangProfile,
+  NetconfYangProfilesResponse,
   PaneState,
   ParseResult,
   Row,
@@ -151,6 +153,11 @@ export class Store {
   /** The gNMI tab's schema tree, parsed from the active YANG profile's directories. */
   yangTree: YangNode[] = [];
   yangDirFiles: DirFiles[] = [];
+  /** The NETCONF-side counterpart to `yangTree`/`yangDirFiles`, parsed from its own separate
+   * active NETCONF YANG profile's directories - see `NetconfYangProfile`'s doc comment for why
+   * this isn't just `yangTree` again. */
+  netconfYangTree: YangNode[] = [];
+  netconfYangDirFiles: DirFiles[] = [];
   /** This machine's non-loopback IPv4 addresses, for the trap listener's "point your device here" hint. Empty until a trap tab has been opened at least once. */
   localIps: string[] = [];
 
@@ -197,6 +204,14 @@ export class Store {
       yangParseErrors: [],
       yangParseErrorsOpen: false,
       selectedYangNodeId: "",
+      netconfYangProfiles: [],
+      activeNetconfYangProfileId: "",
+      netconfYangDirDraft: null,
+      netconfYangProfileDraft: null,
+      renamingNetconfYangProfile: false,
+      netconfYangParseErrors: [],
+      netconfYangParseErrorsOpen: false,
+      selectedNetconfYangNodeId: "",
       leftWidth: 330,
       leftCollapsed: false,
       panes: [{ id: "p1", width: null, activeTabId: null, tabs: [] }],
@@ -212,16 +227,18 @@ export class Store {
   }
 
   async init() {
-    const [profiles, hostProfiles, yangProfiles] = await Promise.all([
+    const [profiles, hostProfiles, yangProfiles, netconfYangProfiles] = await Promise.all([
       invoke<MibProfilesResponse>("list_mib_profiles"),
       invoke<HostProfile[]>("list_host_profiles"),
       invoke<YangProfilesResponse>("list_yang_profiles"),
+      invoke<NetconfYangProfilesResponse>("list_netconf_yang_profiles"),
     ]);
     this.applyMibProfilesResponse(profiles);
     this.hostProfiles = hostProfiles;
     this.applyYangProfilesResponse(yangProfiles);
+    this.applyNetconfYangProfilesResponse(netconfYangProfiles);
     this.notify();
-    await Promise.all([this.loadMibTree(), this.loadYangTree()]);
+    await Promise.all([this.loadMibTree(), this.loadYangTree(), this.loadNetconfYangTree()]);
     if (isTauri) {
       void this.runUpdateCheck();
       setInterval(() => void this.runUpdateCheck(), UPDATE_CHECK_INTERVAL_MS);
@@ -252,6 +269,15 @@ export class Store {
 
   activeYangProfile(): YangProfile | undefined {
     return this.state.yangProfiles.find((p) => p.id === this.state.activeYangProfileId);
+  }
+
+  private applyNetconfYangProfilesResponse(resp: NetconfYangProfilesResponse) {
+    this.state.netconfYangProfiles = resp.profiles;
+    this.state.activeNetconfYangProfileId = resp.activeProfileId;
+  }
+
+  activeNetconfYangProfile(): NetconfYangProfile | undefined {
+    return this.state.netconfYangProfiles.find((p) => p.id === this.state.activeNetconfYangProfileId);
   }
 
   onChange(fn: () => void) {
@@ -708,6 +734,12 @@ export class Store {
     this.notify();
   }
 
+  /** The NETCONF YANG-tree counterpart to `openYangTreeContextMenu`. */
+  openNetconfYangTreeContextMenu(x: number, y: number, nodeId: string) {
+    this.state.treeContextMenu = { x, y, nodeId, kind: "netconf-yang" };
+    this.notify();
+  }
+
   closeTreeContextMenu() {
     this.state.treeContextMenu = null;
     this.notify();
@@ -862,25 +894,18 @@ export class Store {
     this.notify();
   }
 
-  // ---------- YANG directories / profiles (gNMI/NETCONF schema tree) ----------
+  // ---------- YANG directories / profiles (gNMI schema tree) ----------
 
-  /** Single-click: highlight the row, and stage the node's path into whichever gNMI-or-NETCONF
-   * tab is currently active in the active pane - mirroring the sidebar's role as a shared browsing
-   * aid for either protocol. Defaults to a gNMI tab when the active tab is neither (including "no
-   * tab open"), matching this method's behavior before NETCONF existed. A no-op on the path update
-   * when the node has no usable path (e.g. an unresolved `uses` placeholder). */
+  /** Single-click: highlight the row, and - if the active pane's active tab is a gNMI tab - stage
+   * the node's path there too, mirroring the sidebar's role as a browsing aid for whichever gNMI
+   * tab is currently in view. A no-op on the tab when it isn't a gNMI tab (or the node has no
+   * usable path, e.g. an unresolved `uses` placeholder). */
   selectYangNode(node: YangNode) {
     this.state.selectedYangNodeId = node.id;
-    if (!node.path) {
-      this.notify();
-      return;
-    }
-    const pane = this.getPane(this.state.activePaneId);
-    const tab = pane && this.getPaneActiveTab(pane);
-    if (tab?.kind === "netconf") {
-      this.updateActiveNetconfTabInPane(this.state.activePaneId, { path: node.path });
-    } else {
+    if (node.path) {
       this.updateActiveGnmiTabInPane(this.state.activePaneId, { path: node.path });
+    } else {
+      this.notify();
     }
   }
 
@@ -893,20 +918,6 @@ export class Store {
     const pane = this.getPane(this.state.activePaneId);
     if (!pane) return;
     const tab = this.makeGnmiTab("tab" + Date.now(), { path: node.path });
-    pane.tabs.push(tab);
-    pane.activeTabId = tab.id;
-    this.closeTreeContextMenu();
-    this.notify();
-  }
-
-  /** The NETCONF counterpart to `openYangNodeInNewTab`, reached from the tree's context menu
-   * rather than a double-click (which stays gNMI, to keep the existing shortcut unambiguous). */
-  openYangNodeInNewNetconfTab(node: YangNode) {
-    if (!node.path) return;
-    this.state.selectedYangNodeId = node.id;
-    const pane = this.getPane(this.state.activePaneId);
-    if (!pane) return;
-    const tab = this.makeNetconfTab("tab" + Date.now(), { path: node.path });
     pane.tabs.push(tab);
     pane.activeTabId = tab.id;
     this.closeTreeContextMenu();
@@ -1037,6 +1048,160 @@ export class Store {
     this.notify();
   }
 
+  // ---------- YANG directories / profiles (NETCONF schema tree) ----------
+  // The NETCONF-side counterpart to the gNMI section above, over its own separate profile list
+  // (`netconfYangProfiles`) and backend commands (`*_netconf_yang_*`) - see `NetconfYangProfile`'s
+  // doc comment for why NETCONF doesn't just reuse gNMI's YANG directories.
+
+  /** Single-click: highlight the row, and - if the active pane's active tab is a NETCONF tab -
+   * stage the node's path there too. The NETCONF counterpart to `selectYangNode`. */
+  selectNetconfYangNode(node: YangNode) {
+    this.state.selectedNetconfYangNodeId = node.id;
+    if (node.path) {
+      this.updateActiveNetconfTabInPane(this.state.activePaneId, { path: node.path });
+    } else {
+      this.notify();
+    }
+  }
+
+  /** Double-click: opens a new NETCONF tab in the active pane with the node's path pre-filled -
+   * the NETCONF counterpart to `openYangNodeInNewTab`. */
+  openNetconfYangNodeInNewTab(node: YangNode) {
+    if (!node.path) return;
+    this.state.selectedNetconfYangNodeId = node.id;
+    const pane = this.getPane(this.state.activePaneId);
+    if (!pane) return;
+    const tab = this.makeNetconfTab("tab" + Date.now(), { path: node.path });
+    pane.tabs.push(tab);
+    pane.activeTabId = tab.id;
+    this.closeTreeContextMenu();
+    this.notify();
+  }
+
+  toggleNetconfYangParseErrors() {
+    this.state.netconfYangParseErrorsOpen = !this.state.netconfYangParseErrorsOpen;
+    this.notify();
+  }
+
+  async loadNetconfYangTree() {
+    const result = await invoke<YangParseResult>("get_netconf_yang_tree");
+    this.netconfYangTree = result.tree;
+    this.netconfYangDirFiles = result.dirFiles;
+    this.state.netconfYangParseErrors = result.errors;
+    if (result.errors.length === 0) this.state.netconfYangParseErrorsOpen = false;
+    this.notify();
+  }
+
+  async addNetconfYangDir() {
+    if (!isTauri) {
+      this.state.netconfYangDirDraft = "";
+      this.notify();
+      return;
+    }
+    const selected = await pickDirectory();
+    if (!selected) return;
+    await this.commitNetconfYangDir(selected);
+  }
+
+  updateNetconfYangDirDraft(text: string) {
+    this.state.netconfYangDirDraft = text;
+    this.notify();
+  }
+
+  cancelNetconfYangDirDraft() {
+    this.state.netconfYangDirDraft = null;
+    this.notify();
+  }
+
+  async submitNetconfYangDirDraft() {
+    const path = this.state.netconfYangDirDraft?.trim();
+    this.state.netconfYangDirDraft = null;
+    if (!path) {
+      this.notify();
+      return;
+    }
+    await this.commitNetconfYangDir(path);
+  }
+
+  private async commitNetconfYangDir(path: string) {
+    this.applyNetconfYangProfilesResponse(await invoke<NetconfYangProfilesResponse>("add_netconf_yang_dir", { path }));
+    this.notify();
+    await this.loadNetconfYangTree();
+  }
+
+  async removeNetconfYangDir(path: string) {
+    this.applyNetconfYangProfilesResponse(await invoke<NetconfYangProfilesResponse>("remove_netconf_yang_dir", { path }));
+    this.notify();
+    await this.loadNetconfYangTree();
+  }
+
+  async switchNetconfYangProfile(id: string) {
+    if (id === this.state.activeNetconfYangProfileId) return;
+    this.applyNetconfYangProfilesResponse(await invoke<NetconfYangProfilesResponse>("set_active_netconf_yang_profile", { id }));
+    this.notify();
+    await this.loadNetconfYangTree();
+  }
+
+  startNetconfYangProfileDraft() {
+    this.state.netconfYangProfileDraft = "";
+    this.notify();
+  }
+
+  updateNetconfYangProfileDraft(text: string) {
+    this.state.netconfYangProfileDraft = text;
+    this.notify();
+  }
+
+  cancelNetconfYangProfileDraft() {
+    this.state.netconfYangProfileDraft = null;
+    this.notify();
+  }
+
+  async submitNetconfYangProfileDraft() {
+    const name = this.state.netconfYangProfileDraft?.trim();
+    this.state.netconfYangProfileDraft = null;
+    if (!name) {
+      this.notify();
+      return;
+    }
+    this.applyNetconfYangProfilesResponse(await invoke<NetconfYangProfilesResponse>("add_netconf_yang_profile", { name }));
+    this.notify();
+    await this.loadNetconfYangTree();
+  }
+
+  async removeNetconfYangProfile(id: string) {
+    if (this.state.netconfYangProfiles.length <= 1) return;
+    const wasActive = id === this.state.activeNetconfYangProfileId;
+    this.applyNetconfYangProfilesResponse(await invoke<NetconfYangProfilesResponse>("remove_netconf_yang_profile", { id }));
+    if (wasActive) {
+      this.notify();
+      await this.loadNetconfYangTree();
+    } else {
+      this.notify();
+    }
+  }
+
+  startRenamingNetconfYangProfile() {
+    this.state.renamingNetconfYangProfile = true;
+    this.notify();
+  }
+
+  cancelRenamingNetconfYangProfile() {
+    this.state.renamingNetconfYangProfile = false;
+    this.notify();
+  }
+
+  async renameNetconfYangProfile(id: string, name: string) {
+    this.state.renamingNetconfYangProfile = false;
+    const trimmed = name.trim();
+    if (!trimmed) {
+      this.notify();
+      return;
+    }
+    this.applyNetconfYangProfilesResponse(await invoke<NetconfYangProfilesResponse>("rename_netconf_yang_profile", { id, name: trimmed }));
+    this.notify();
+  }
+
   /** The tree currently shown in the sidebar: the full group hierarchy, or the flat tables-only view. */
   activeTree(): MibNode[] {
     return this.state.tablesOnlyMode ? this.tablesTree : this.tree;
@@ -1070,6 +1235,16 @@ export class Store {
     for (const n of nodes) {
       if (n.id === id) return n;
       const f = this.findYangNode(n.children, id);
+      if (f) return f;
+    }
+    return null;
+  }
+
+  /** The NETCONF YANG-tree counterpart to `findYangNode`. */
+  findNetconfYangNode(nodes: YangNode[], id: string): YangNode | null {
+    for (const n of nodes) {
+      if (n.id === id) return n;
+      const f = this.findNetconfYangNode(n.children, id);
       if (f) return f;
     }
     return null;

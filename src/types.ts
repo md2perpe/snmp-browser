@@ -68,6 +68,19 @@ export interface YangProfilesResponse {
   activeProfileId: string;
 }
 
+/** The NETCONF-side counterpart to `YangProfile` - a separate named set of `.yang` directories,
+ * not shared with gNMI's (see the Rust `NetconfYangProfile`'s doc comment). */
+export interface NetconfYangProfile {
+  id: string;
+  name: string;
+  dirs: string[];
+}
+
+export interface NetconfYangProfilesResponse {
+  profiles: NetconfYangProfile[];
+  activeProfileId: string;
+}
+
 export interface HostProfile {
   id: string;
   label: string;
@@ -367,12 +380,23 @@ export interface AppState {
   yangParseErrorsOpen: boolean;
   /** Id of the YANG tree row highlighted by a single click - the YANG counterpart to `selectedTreeNodeId`. */
   selectedYangNodeId: string;
+  /** The NETCONF-side counterpart to `yangProfiles` and its surrounding UI state - kept entirely
+   * separate rather than shared with gNMI's, since a target's NETCONF YANG modules commonly come
+   * from a different directory than what's loaded for gNMI (see the Rust `NetconfYangProfile`). */
+  netconfYangProfiles: NetconfYangProfile[];
+  activeNetconfYangProfileId: string;
+  netconfYangDirDraft: string | null;
+  netconfYangProfileDraft: string | null;
+  renamingNetconfYangProfile: boolean;
+  netconfYangParseErrors: FileErrors[];
+  netconfYangParseErrorsOpen: boolean;
+  selectedNetconfYangNodeId: string;
   leftWidth: number;
   leftCollapsed: boolean;
   panes: PaneState[];
   activePaneId: string;
-  /** Right-click context menu on a tree node (MIB or YANG); null when closed. */
-  treeContextMenu: { x: number; y: number; nodeId: string; kind: "mib" | "yang" } | null;
+  /** Right-click context menu on a tree node (MIB, gNMI's YANG, or NETCONF's YANG); null when closed. */
+  treeContextMenu: { x: number; y: number; nodeId: string; kind: "mib" | "yang" | "netconf-yang" } | null;
   /** Fetch mode dropdown (manual vs. auto-refresh) for a pane's split button; null when closed. */
   refreshMenu: { paneId: string; x: number; y: number } | null;
   /** Export-format dropdown (CSV vs. PNG) for a pane's export button; null when closed. */

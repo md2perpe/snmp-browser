@@ -7,7 +7,7 @@ pub mod trap;
 pub mod yang;
 
 use serde::Serialize;
-use settings::{HostProfile, MibProfile, Settings, YangProfile};
+use settings::{HostProfile, MibProfile, NetconfYangProfile, Settings, YangProfile};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tauri::{Manager, State};
@@ -211,6 +211,109 @@ fn get_yang_tree(state: State<AppState>) -> yang::YangParseResult {
     yang::parse_directories(&dirs)
 }
 
+/// The NETCONF-side counterpart to `YangProfilesResponse`/`yang_profiles_response` and the
+/// commands built on them below - mirrors them exactly, over `settings.netconf_yang_profiles`
+/// instead of `settings.yang_profiles`, since NETCONF keeps its own separate YANG directories
+/// (see `NetconfYangProfile`'s doc comment).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NetconfYangProfilesResponse {
+    profiles: Vec<NetconfYangProfile>,
+    active_profile_id: String,
+}
+
+fn netconf_yang_profiles_response(settings: &Settings) -> NetconfYangProfilesResponse {
+    NetconfYangProfilesResponse {
+        profiles: settings.netconf_yang_profiles.clone(),
+        active_profile_id: settings.active_netconf_yang_profile_id.clone(),
+    }
+}
+
+#[tauri::command]
+fn list_netconf_yang_profiles(state: State<AppState>) -> NetconfYangProfilesResponse {
+    netconf_yang_profiles_response(&state.settings.lock().unwrap())
+}
+
+#[tauri::command]
+fn add_netconf_yang_profile(state: State<AppState>, name: String) -> NetconfYangProfilesResponse {
+    let resp = {
+        let mut settings = state.settings.lock().unwrap();
+        settings.add_netconf_yang_profile(name);
+        netconf_yang_profiles_response(&settings)
+    };
+    state.save();
+    resp
+}
+
+#[tauri::command]
+fn remove_netconf_yang_profile(state: State<AppState>, id: String) -> NetconfYangProfilesResponse {
+    let resp = {
+        let mut settings = state.settings.lock().unwrap();
+        settings.remove_netconf_yang_profile(&id);
+        netconf_yang_profiles_response(&settings)
+    };
+    state.save();
+    resp
+}
+
+#[tauri::command]
+fn rename_netconf_yang_profile(state: State<AppState>, id: String, name: String) -> NetconfYangProfilesResponse {
+    let resp = {
+        let mut settings = state.settings.lock().unwrap();
+        settings.rename_netconf_yang_profile(&id, name);
+        netconf_yang_profiles_response(&settings)
+    };
+    state.save();
+    resp
+}
+
+#[tauri::command]
+fn set_active_netconf_yang_profile(state: State<AppState>, id: String) -> NetconfYangProfilesResponse {
+    let resp = {
+        let mut settings = state.settings.lock().unwrap();
+        if settings.netconf_yang_profiles.iter().any(|p| p.id == id) {
+            settings.active_netconf_yang_profile_id = id;
+        }
+        netconf_yang_profiles_response(&settings)
+    };
+    state.save();
+    resp
+}
+
+#[tauri::command]
+fn add_netconf_yang_dir(state: State<AppState>, path: String) -> NetconfYangProfilesResponse {
+    let resp = {
+        let mut settings = state.settings.lock().unwrap();
+        if let Some(p) = settings.active_netconf_yang_profile_mut() {
+            if !p.dirs.contains(&path) {
+                p.dirs.push(path);
+            }
+        }
+        netconf_yang_profiles_response(&settings)
+    };
+    state.save();
+    resp
+}
+
+#[tauri::command]
+fn remove_netconf_yang_dir(state: State<AppState>, path: String) -> NetconfYangProfilesResponse {
+    let resp = {
+        let mut settings = state.settings.lock().unwrap();
+        if let Some(p) = settings.active_netconf_yang_profile_mut() {
+            p.dirs.retain(|d| d != &path);
+        }
+        netconf_yang_profiles_response(&settings)
+    };
+    state.save();
+    resp
+}
+
+#[tauri::command]
+fn get_netconf_yang_tree(state: State<AppState>) -> yang::YangParseResult {
+    let dirs = state.settings.lock().unwrap().active_netconf_yang_profile().map(|p| p.dirs.clone()).unwrap_or_default();
+    yang::parse_directories(&dirs)
+}
+
 #[tauri::command]
 fn list_host_profiles(state: State<AppState>) -> Vec<HostProfile> {
     state.settings.lock().unwrap().host_profiles.clone()
@@ -301,12 +404,13 @@ async fn netconf_capabilities(connection: netconf::NetconfConnectionParams) -> R
     netconf::capabilities(&connection).await
 }
 
-/// Unlike `gnmi_get`, this needs the active YANG profile's parsed modules (specifically their
-/// namespace URIs) to turn `path`'s `module-name:node-name` qualifiers into the target's
-/// `<filter type="xpath">` - see `netconf.rs`'s doc comment for why.
+/// Unlike `gnmi_get`, this needs the active NETCONF YANG profile's parsed modules (specifically
+/// their namespace URIs) to turn `path`'s `module-name:node-name` qualifiers into the target's
+/// `<filter type="xpath">` - see `netconf.rs`'s doc comment for why, and `NetconfYangProfile`'s
+/// doc comment for why this is its own profile rather than gNMI's `active_yang_profile`.
 #[tauri::command]
 async fn netconf_get(state: State<'_, AppState>, connection: netconf::NetconfConnectionParams, path: String) -> Result<netconf::NetconfTree, String> {
-    let dirs = state.settings.lock().unwrap().active_yang_profile().map(|p| p.dirs.clone()).unwrap_or_default();
+    let dirs = state.settings.lock().unwrap().active_netconf_yang_profile().map(|p| p.dirs.clone()).unwrap_or_default();
     let parsed = yang::parse_directories(&dirs);
     netconf::get(&connection, &path, &parsed.module_namespaces).await
 }
@@ -354,6 +458,14 @@ pub fn run() {
             add_yang_dir,
             remove_yang_dir,
             get_yang_tree,
+            list_netconf_yang_profiles,
+            add_netconf_yang_profile,
+            remove_netconf_yang_profile,
+            rename_netconf_yang_profile,
+            set_active_netconf_yang_profile,
+            add_netconf_yang_dir,
+            remove_netconf_yang_dir,
+            get_netconf_yang_tree,
             list_host_profiles,
             get_mib_tree,
             fetch,
