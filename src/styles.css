@@ -956,6 +956,17 @@ button {
 .field-mono {
   font-family: ui-monospace, Menlo, monospace;
 }
+/* A `.field-input` variant for a multi-line payload (NETCONF's edit-config/raw-rpc XML) - same
+   look, but sized and wrapped for pasted-in XML instead of a single line. */
+.field-textarea {
+  height: auto;
+  min-height: 120px;
+  padding: 8px;
+  line-height: 1.4;
+  resize: vertical;
+  white-space: pre;
+  overflow: auto;
+}
 .field-addr {
   width: 140px;
 }
@@ -1573,4 +1584,16 @@ table.trap-table {
   padding-left: 128px;
   font-family: ui-monospace, Menlo, monospace;
   color: var(--text-secondary);
+}
+
+/* A NETCONF edit-config/raw-rpc reply's raw <rpc-reply> XML. */
+.netconf-raw-reply {
+  margin: 0;
+  padding: 14px 18px;
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
 }

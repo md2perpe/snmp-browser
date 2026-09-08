@@ -17,6 +17,7 @@ import type {
   MibProfilesResponse,
   NetconfCapabilities,
   NetconfConnectionParams,
+  NetconfMode,
   NetconfNode,
   NetconfTabState,
   NetconfYangProfile,
@@ -431,9 +432,15 @@ export class Store {
       hostPort: DEFAULT_NETCONF_PORT,
       username: DEFAULT_NETCONF_USERNAME,
       password: DEFAULT_NETCONF_PASSWORD,
+      mode: "get",
       path: "/",
+      editTarget: "running",
+      editDefaultOperation: "",
+      editConfigXml: "",
+      rawRpcXml: "",
       capabilities: null,
       result: null,
+      writeReply: null,
       expandedIds: {},
       loading: false,
       fetchError: null,
@@ -1736,6 +1743,12 @@ export class Store {
     this.updateActiveNetconfTabInPane(paneId, (t) => ({ expandedIds: { ...t.expandedIds, [nodeKey]: !t.expandedIds[nodeKey] } }));
   }
 
+  /** Switches a NETCONF tab's operation (Get / Edit Config / Raw RPC), clearing any error left
+   * over from whichever operation was previously in view. */
+  setNetconfMode(paneId: string, mode: NetconfMode) {
+    this.updateActiveNetconfTabInPane(paneId, { mode, fetchError: null });
+  }
+
   /** A NETCONF tab's connection fields in the shape the backend's `netconf_capabilities`/`netconf_get` commands expect. */
   private netconfConnectionOf(tab: NetconfTabState): NetconfConnectionParams {
     return { hostAddr: tab.hostAddr, hostPort: tab.hostPort, username: tab.username, password: tab.password };
@@ -1791,6 +1804,79 @@ export class Store {
       const result = await invoke<{ roots: NetconfNode[] }>("netconf_get", { connection: this.netconfConnectionOf(tab), path: tab.path });
       tab.result = result.roots;
       tab.expandedIds = {};
+      tab.fetchError = null;
+    } catch (e) {
+      tab.fetchError = errorMessage(e);
+    }
+    tab.loading = false;
+    tab.lastFetch = new Date().toLocaleTimeString();
+    this.notify();
+  }
+
+  /** Sends the tab's `<config>` payload as an `<edit-config>` - unlike `runNetconfGet`, this
+   * mutates the target's configuration, so it confirms with the user first (see `netconf.rs`'s
+   * doc comment for why the payload is raw XML rather than a generated form). */
+  async runNetconfEditConfig(paneId: string) {
+    const pane = this.getPane(paneId);
+    const tab = pane && this.getPaneActiveTab(pane);
+    if (!tab || tab.kind !== "netconf") return;
+    if (!this.hasCompleteNetconfConnection(tab)) {
+      tab.fetchError = "Fill in the target address, port, username, and password first";
+      this.notify();
+      return;
+    }
+    if (!tab.editConfigXml.trim()) {
+      tab.fetchError = "Enter the <config> payload first";
+      this.notify();
+      return;
+    }
+    if (!window.confirm(`Send this edit-config to ${tab.hostAddr}:${tab.hostPort} (target: ${tab.editTarget})?\n\nThis changes the target's configuration.`)) {
+      return;
+    }
+    this.noteUsedAddr(tab.hostAddr);
+    tab.loading = true;
+    this.notify();
+    try {
+      tab.writeReply = await invoke<string>("netconf_edit_config", {
+        connection: this.netconfConnectionOf(tab),
+        target: tab.editTarget,
+        defaultOperation: tab.editDefaultOperation || null,
+        configXml: tab.editConfigXml,
+      });
+      tab.fetchError = null;
+    } catch (e) {
+      tab.fetchError = errorMessage(e);
+    }
+    tab.loading = false;
+    tab.lastFetch = new Date().toLocaleTimeString();
+    this.notify();
+  }
+
+  /** Sends the tab's raw RPC XML wrapped in `<rpc>...</rpc>` - the generic escape hatch for a
+   * YANG-1.1 action, `<commit/>`, or any other operation this app has no dedicated UI for (see
+   * `netconf.rs`'s doc comment). Confirms with the user first, like `runNetconfEditConfig`. */
+  async runNetconfRawRpc(paneId: string) {
+    const pane = this.getPane(paneId);
+    const tab = pane && this.getPaneActiveTab(pane);
+    if (!tab || tab.kind !== "netconf") return;
+    if (!this.hasCompleteNetconfConnection(tab)) {
+      tab.fetchError = "Fill in the target address, port, username, and password first";
+      this.notify();
+      return;
+    }
+    if (!tab.rawRpcXml.trim()) {
+      tab.fetchError = "Enter the RPC XML first";
+      this.notify();
+      return;
+    }
+    if (!window.confirm(`Send this RPC to ${tab.hostAddr}:${tab.hostPort}?\n\nThis may change the target's state.`)) {
+      return;
+    }
+    this.noteUsedAddr(tab.hostAddr);
+    tab.loading = true;
+    this.notify();
+    try {
+      tab.writeReply = await invoke<string>("netconf_raw_rpc", { connection: this.netconfConnectionOf(tab), innerXml: tab.rawRpcXml });
       tab.fetchError = null;
     } catch (e) {
       tab.fetchError = errorMessage(e);

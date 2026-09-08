@@ -9,6 +9,7 @@ import type {
   GnmiNode,
   GnmiTabState,
   MibNode,
+  NetconfMode,
   NetconfNode,
   NetconfTabState,
   NodeType,
@@ -2562,9 +2563,28 @@ function renderGnmiPane(store: Store, pane: PaneState, tab: GnmiTabState): HTMLE
   return [renderGnmiToolbar(store, pane, tab), renderGnmiBody(store, pane, tab)];
 }
 
+const NETCONF_MODE_OPTIONS: { id: NetconfMode; label: string }[] = [
+  { id: "get", label: "Get" },
+  { id: "editConfig", label: "Edit Config" },
+  { id: "rawRpc", label: "Raw RPC" },
+];
+
+const EDIT_TARGET_OPTIONS: { id: NetconfTabState["editTarget"]; label: string }[] = [
+  { id: "running", label: "Running" },
+  { id: "candidate", label: "Candidate" },
+];
+
+const DEFAULT_OPERATION_OPTIONS: { id: NetconfTabState["editDefaultOperation"]; label: string }[] = [
+  { id: "", label: "(unset)" },
+  { id: "merge", label: "Merge" },
+  { id: "replace", label: "Replace" },
+  { id: "none", label: "None" },
+];
+
 /** The NETCONF-tab counterpart to `renderGnmiToolbar`: address/port/username/password (SSH,
  * password auth only in Phase 1 - see `netconf.rs`) instead of gNMI's address/port/TLS/username/
- * password, otherwise the same Capabilities-button-plus-path-and-Get-row shape. */
+ * password, plus a Get/Edit Config/Raw RPC mode selector - see `NetconfMode`'s doc comment for
+ * what each mode does and why `editConfig`/`rawRpc` take raw XML rather than a generated form. */
 function renderNetconfToolbar(store: Store, pane: PaneState, tab: NetconfTabState): HTMLElement {
   const fields: HTMLElement[] = [
     el("div", { class: "field" }, [
@@ -2608,6 +2628,24 @@ function renderNetconfToolbar(store: Store, pane: PaneState, tab: NetconfTabStat
         oninput: (e: Event) => store.updateActiveNetconfTabInPane(pane.id, { password: (e.target as HTMLInputElement).value }),
       }),
     ]),
+    el("div", { class: "field" }, [
+      el("label", { class: "field-label" }, ["Mode"]),
+      el(
+        "div",
+        { class: "version-toggle" },
+        NETCONF_MODE_OPTIONS.map((opt) =>
+          el(
+            "button",
+            {
+              class: "version-btn" + (tab.mode === opt.id ? " active" : ""),
+              disabled: tab.loading,
+              onclick: () => store.setNetconfMode(pane.id, opt.id),
+            },
+            [opt.label],
+          ),
+        ),
+      ),
+    ]),
   ];
 
   const canRun = store.hasCompleteNetconfConnection(tab);
@@ -2626,17 +2664,95 @@ function renderNetconfToolbar(store: Store, pane: PaneState, tab: NetconfTabStat
     ),
   );
 
-  const pathRow = el("div", { class: "toolbar-row" }, [
+  const actionRow = tab.mode === "get" ? renderNetconfGetRow(store, pane, tab, canRun, runDisabledReason) : tab.mode === "editConfig" ? renderNetconfEditConfigRows(store, pane, tab, canRun, runDisabledReason) : renderNetconfRawRpcRows(store, pane, tab, canRun, runDisabledReason);
+
+  return el("div", { class: "toolbar" }, [el("div", { class: "toolbar-row" }, fields), ...actionRow]);
+}
+
+function renderNetconfGetRow(store: Store, pane: PaneState, tab: NetconfTabState, canRun: boolean, runDisabledReason: string): HTMLElement[] {
+  return [
+    el("div", { class: "toolbar-row" }, [
+      el("div", { class: "field", style: { flex: "1" } }, [
+        el("label", { class: "field-label" }, ["Path"]),
+        el("input", {
+          class: "field-input field-mono",
+          style: { width: "100%" },
+          placeholder: "/interfaces/interface[name='eth0']",
+          value: tab.path,
+          disabled: tab.loading,
+          "data-focus-key": `netconf:${tab.id}:path`,
+          oninput: (e: Event) => store.updateActiveNetconfTabInPane(pane.id, { path: (e.target as HTMLInputElement).value }),
+        }),
+      ]),
+      el(
+        "button",
+        {
+          class: "split-btn-main",
+          style: { borderRadius: "7px", alignSelf: "flex-end", height: "28px" },
+          disabled: !canRun || tab.loading || !tab.path.trim(),
+          title: runDisabledReason,
+          onclick: () => void store.runNetconfGet(pane.id),
+        },
+        [tab.loading ? "Fetching…" : "Get"],
+      ),
+    ]),
+  ];
+}
+
+/** `editConfig` mode's rows: target datastore + default-operation toggles, then the `<config>`
+ * payload textarea and Send button - mutates the target, so `runNetconfEditConfig` confirms with
+ * the user before actually sending. */
+function renderNetconfEditConfigRows(store: Store, pane: PaneState, tab: NetconfTabState, canRun: boolean, runDisabledReason: string): HTMLElement[] {
+  const optionsRow = el("div", { class: "toolbar-row" }, [
+    el("div", { class: "field" }, [
+      el("label", { class: "field-label" }, ["Target"]),
+      el(
+        "div",
+        { class: "version-toggle" },
+        EDIT_TARGET_OPTIONS.map((opt) =>
+          el(
+            "button",
+            {
+              class: "version-btn" + (tab.editTarget === opt.id ? " active" : ""),
+              disabled: tab.loading,
+              onclick: () => store.updateActiveNetconfTabInPane(pane.id, { editTarget: opt.id }),
+            },
+            [opt.label],
+          ),
+        ),
+      ),
+    ]),
+    el("div", { class: "field" }, [
+      el("label", { class: "field-label" }, ["Default Operation"]),
+      el(
+        "div",
+        { class: "version-toggle" },
+        DEFAULT_OPERATION_OPTIONS.map((opt) =>
+          el(
+            "button",
+            {
+              class: "version-btn" + (tab.editDefaultOperation === opt.id ? " active" : ""),
+              disabled: tab.loading,
+              onclick: () => store.updateActiveNetconfTabInPane(pane.id, { editDefaultOperation: opt.id }),
+            },
+            [opt.label],
+          ),
+        ),
+      ),
+    ]),
+  ]);
+
+  const payloadRow = el("div", { class: "toolbar-row" }, [
     el("div", { class: "field", style: { flex: "1" } }, [
-      el("label", { class: "field-label" }, ["Path"]),
-      el("input", {
-        class: "field-input field-mono",
+      el("label", { class: "field-label" }, ["Config XML"]),
+      el("textarea", {
+        class: "field-input field-mono field-textarea",
         style: { width: "100%" },
-        placeholder: "/interfaces/interface[name='eth0']",
-        value: tab.path,
+        placeholder: '<system xmlns="urn:example"><hostname>router1</hostname></system>',
+        value: tab.editConfigXml,
         disabled: tab.loading,
-        "data-focus-key": `netconf:${tab.id}:path`,
-        oninput: (e: Event) => store.updateActiveNetconfTabInPane(pane.id, { path: (e.target as HTMLInputElement).value }),
+        "data-focus-key": `netconf:${tab.id}:editConfigXml`,
+        oninput: (e: Event) => store.updateActiveNetconfTabInPane(pane.id, { editConfigXml: (e.target as HTMLTextAreaElement).value }),
       }),
     ]),
     el(
@@ -2644,15 +2760,49 @@ function renderNetconfToolbar(store: Store, pane: PaneState, tab: NetconfTabStat
       {
         class: "split-btn-main",
         style: { borderRadius: "7px", alignSelf: "flex-end", height: "28px" },
-        disabled: !canRun || tab.loading || !tab.path.trim(),
+        disabled: !canRun || tab.loading || !tab.editConfigXml.trim(),
         title: runDisabledReason,
-        onclick: () => void store.runNetconfGet(pane.id),
+        onclick: () => void store.runNetconfEditConfig(pane.id),
       },
-      [tab.loading ? "Fetching…" : "Get"],
+      [tab.loading ? "Sending…" : "Send"],
     ),
   ]);
 
-  return el("div", { class: "toolbar" }, [el("div", { class: "toolbar-row" }, fields), pathRow]);
+  return [optionsRow, payloadRow];
+}
+
+/** `rawRpc` mode's row: a single textarea for the exact inner XML of any operation, wrapped only
+ * in `<rpc>` server-side - see `NetconfMode`'s doc comment. Mutates the target in general (a
+ * `<get>`-shaped RPC would be harmless, but this app can't tell which is which), so
+ * `runNetconfRawRpc` confirms with the user before sending, same as `editConfig`. */
+function renderNetconfRawRpcRows(store: Store, pane: PaneState, tab: NetconfTabState, canRun: boolean, runDisabledReason: string): HTMLElement[] {
+  return [
+    el("div", { class: "toolbar-row" }, [
+      el("div", { class: "field", style: { flex: "1" } }, [
+        el("label", { class: "field-label" }, ["RPC XML"]),
+        el("textarea", {
+          class: "field-input field-mono field-textarea",
+          style: { width: "100%" },
+          placeholder: "<commit/>",
+          value: tab.rawRpcXml,
+          disabled: tab.loading,
+          "data-focus-key": `netconf:${tab.id}:rawRpcXml`,
+          oninput: (e: Event) => store.updateActiveNetconfTabInPane(pane.id, { rawRpcXml: (e.target as HTMLTextAreaElement).value }),
+        }),
+      ]),
+      el(
+        "button",
+        {
+          class: "split-btn-main",
+          style: { borderRadius: "7px", alignSelf: "flex-end", height: "28px" },
+          disabled: !canRun || tab.loading || !tab.rawRpcXml.trim(),
+          title: runDisabledReason,
+          onclick: () => void store.runNetconfRawRpc(pane.id),
+        },
+        [tab.loading ? "Sending…" : "Send"],
+      ),
+    ]),
+  ];
 }
 
 /** Stable identity for a NETCONF result node's expand/collapse state, mirroring `gnmiNodeKey`. */
@@ -2716,16 +2866,23 @@ function renderNetconfBody(store: Store, pane: PaneState, tab: NetconfTabState):
   if (tab.fetchError) {
     return el("div", { class: "table-scroll" }, [el("div", { class: "table-empty" }, [tab.fetchError])]);
   }
-  if (tab.result) {
+  if (tab.mode === "get" && tab.result) {
     const rows = tab.result.flatMap((n) => renderNetconfNode(store, pane, tab, n, "", 0));
     return el("div", { class: "table-scroll" }, [el("div", { class: "gnmi-tree" }, rows)]);
+  }
+  if (tab.mode !== "get" && tab.writeReply) {
+    return el("div", { class: "table-scroll" }, [el("pre", { class: "netconf-raw-reply" }, [tab.writeReply])]);
   }
   if (tab.capabilities) {
     return el("div", { class: "table-scroll" }, [renderNetconfCapabilities(tab.capabilities)]);
   }
-  return el("div", { class: "table-scroll" }, [
-    el("div", { class: "table-empty" }, ["Enter a target and path, then click Get - or click Capabilities to see what the target supports."]),
-  ]);
+  const placeholder =
+    tab.mode === "get"
+      ? "Enter a target and path, then click Get - or click Capabilities to see what the target supports."
+      : tab.mode === "editConfig"
+        ? "Enter a <config> payload, then click Send - or click Capabilities to see what the target supports."
+        : "Enter the RPC's inner XML, then click Send - or click Capabilities to see what the target supports.";
+  return el("div", { class: "table-scroll" }, [el("div", { class: "table-empty" }, [placeholder])]);
 }
 
 function renderNetconfPane(store: Store, pane: PaneState, tab: NetconfTabState): HTMLElement[] {

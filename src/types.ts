@@ -265,6 +265,12 @@ export interface NetconfCapabilities {
 /** A pane tab dedicated to browsing a NETCONF target over SSH: a `<hello>` capabilities check and
  * one-shot `<get>` requests filtered by an XPath path staged from the shared YANG tree - the
  * NETCONF counterpart to `GnmiTabState`. */
+/** Which of the NETCONF tab's three operations is in view. `get` is read-only; `editConfig` and
+ * `rawRpc` mutate the target and are gated behind a confirmation prompt before sending - see
+ * `netconf.rs`'s doc comment for why `rawRpc` (rather than a schema-driven action/RPC form) is how
+ * this app reaches a YANG-1.1 action, `<commit/>`, or any other non-`get`/`edit-config` operation. */
+export type NetconfMode = "get" | "editConfig" | "rawRpc";
+
 export interface NetconfTabState {
   kind: "netconf";
   id: string;
@@ -272,12 +278,23 @@ export interface NetconfTabState {
   hostPort: string;
   username: string;
   password: string;
+  mode: NetconfMode;
   /** Manually-typed XPath-style path, e.g. "/interfaces/interface[name='eth0']"; "/" fetches the whole datastore. */
   path: string;
+  /** `editConfig` mode: the `<edit-config>` target datastore. */
+  editTarget: "running" | "candidate";
+  /** `editConfig` mode: the RPC-level default-operation; "" omits it (leaving the target's own default in effect). */
+  editDefaultOperation: "" | "merge" | "replace" | "none";
+  /** `editConfig` mode: the raw XML that becomes the content of `<config>`. */
+  editConfigXml: string;
+  /** `rawRpc` mode: the raw inner XML wrapped in `<rpc>...</rpc>` verbatim. */
+  rawRpcXml: string;
   /** Last successful `<hello>` capabilities, or null before the first call. */
   capabilities: NetconfCapabilities | null;
-  /** Last successful `<get>` result's roots, or null before the first fetch. */
+  /** `get` mode: last successful result's roots, or null before the first fetch. */
   result: NetconfNode[] | null;
+  /** `editConfig`/`rawRpc` mode: last successful call's raw `<rpc-reply>` XML, or null before the first send. */
+  writeReply: string | null;
   /** Tree-expand state for `result`, keyed by each node's path-so-far. */
   expandedIds: Record<string, boolean>;
   loading: boolean;

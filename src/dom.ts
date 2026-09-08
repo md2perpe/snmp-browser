@@ -66,15 +66,26 @@ export function cssEscape(s: string): string {
  * the sidebar splitter - so without this, every scrollable panel would jump
  * back to the top on each unrelated state change.
  */
+type ReusableField = HTMLInputElement | HTMLTextAreaElement;
+
+/** Whether `fresh` is a same-shaped replacement for `reusable` - both textareas, or both inputs
+ * of the same `type` (an `<input type="text">` and an `<input type="password">` aren't
+ * interchangeable even if they share a focus key across a re-render, e.g. a field that toggles
+ * a "show password" state). */
+function sameReusableFieldType(fresh: Element, reusable: ReusableField): boolean {
+  if (reusable instanceof HTMLTextAreaElement) return fresh instanceof HTMLTextAreaElement;
+  return fresh instanceof HTMLInputElement && fresh.type === reusable.type;
+}
+
 export function renderPreservingFocus(root: HTMLElement, build: () => Node) {
   const active = document.activeElement;
   let focusKey: string | null = null;
   let selStart: number | null = null;
   let selEnd: number | null = null;
-  let reusableInput: HTMLInputElement | null = null;
+  let reusableInput: ReusableField | null = null;
   if (active instanceof HTMLElement && root.contains(active)) {
     focusKey = active.getAttribute("data-focus-key");
-    if (active instanceof HTMLInputElement) {
+    if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) {
       reusableInput = active;
       try {
         selStart = active.selectionStart;
@@ -94,16 +105,18 @@ export function renderPreservingFocus(root: HTMLElement, build: () => Node) {
 
   // The app re-renders its whole tree on every keystroke (each oninput handler
   // writes to the store, which synchronously rebuilds everything), which would
-  // normally replace the focused <input> with a freshly-built one and wipe its
-  // native undo/redo history. Splice the still-live, already-focused DOM node
-  // back in for its freshly-built counterpart so that history survives - its
-  // value already matches state (it's what the keystroke just wrote there), so
-  // nothing else needs to be copied over. Only possible when the input carries
-  // a focus key, since that's how its freshly-built counterpart is found.
+  // normally replace the focused <input>/<textarea> with a freshly-built one and
+  // wipe its native undo/redo history (and, for a multi-line <textarea>, reset
+  // the cursor to the end on every keystroke). Splice the still-live,
+  // already-focused DOM node back in for its freshly-built counterpart so both
+  // survive - its value already matches state (it's what the keystroke just
+  // wrote there), so nothing else needs to be copied over. Only possible when
+  // the field carries a focus key, since that's how its freshly-built
+  // counterpart is found.
   let spliced = false;
   if (focusKey && reusableInput && next instanceof Element) {
     const fresh = next.querySelector(`[data-focus-key="${cssEscape(focusKey)}"]`);
-    if (fresh instanceof HTMLInputElement && fresh.type === reusableInput.type) {
+    if (fresh && sameReusableFieldType(fresh, reusableInput)) {
       fresh.replaceWith(reusableInput);
       spliced = true;
     }
@@ -124,7 +137,7 @@ export function renderPreservingFocus(root: HTMLElement, build: () => Node) {
     const found = root.querySelector(`[data-focus-key="${cssEscape(focusKey)}"]`);
     if (found instanceof HTMLElement) {
       found.focus();
-      if (found instanceof HTMLInputElement && selStart != null) {
+      if ((found instanceof HTMLInputElement || found instanceof HTMLTextAreaElement) && selStart != null) {
         try {
           found.setSelectionRange(selStart, selEnd ?? selStart);
         } catch {
