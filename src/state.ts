@@ -283,6 +283,7 @@ export class Store {
       v3User: h?.v3User ?? "",
       v3Auth: "",
       v3Priv: "",
+      sshUser: "admin",
       selectedNode: "",
       columns: [],
       displayHints: {},
@@ -1157,14 +1158,16 @@ export class Store {
     this.notify();
   }
 
-  /** "Open SSH" toolbar click - launches a terminal running `ssh <host>` against the pane's active tab's target. */
+  /** "Open SSH" toolbar click - launches a terminal running `ssh [user@]<host>` against the pane's active tab's target. */
   async openSsh(paneId: string) {
     const pane = this.getPane(paneId);
     if (!pane) return;
     const tab = this.getPaneActiveTab(pane);
     if (!tab || tab.kind !== "query" || !tab.hostAddr.trim()) return;
+    const user = tab.sshUser.trim();
+    const target = user ? `${user}@${tab.hostAddr.trim()}` : tab.hostAddr.trim();
     try {
-      await invoke<void>("open_ssh", { host: tab.hostAddr.trim() });
+      await invoke<void>("open_ssh", { host: target });
     } catch (e) {
       tab.fetchError = errorMessage(e);
       this.notify();

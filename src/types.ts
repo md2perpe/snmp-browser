@@ -115,6 +115,8 @@ export interface TabState {
   v3User: string;
   v3Auth: string;
   v3Priv: string;
+  /** Username for the "Open SSH" toolbar button - independent of the SNMP v3 security user, since the two are usually unrelated logins. Defaults to "admin", the common default on network equipment. */
+  sshUser: string;
   selectedNode: string;
   /** Column order from the last successful fetch; empty until the first fetch. */
   columns: string[];

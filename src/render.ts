@@ -722,12 +722,24 @@ function renderToolbar(store: Store, pane: PaneState, tab: TabState): HTMLElemen
         oninput: (e: Event) => store.updateActiveTabInPane(pane.id, { hostAddr: (e.target as HTMLInputElement).value }),
       }),
     ]),
+    el("div", { class: "field" }, [
+      el("label", { class: "field-label" }, ["SSH User"]),
+      el("input", {
+        class: "field-input field-ssh-user field-mono",
+        value: tab.sshUser,
+        placeholder: "admin",
+        "data-focus-key": `tab:${tab.id}:sshuser`,
+        oninput: (e: Event) => store.updateActiveTabInPane(pane.id, { sshUser: (e.target as HTMLInputElement).value }),
+      }),
+    ]),
     el(
       "button",
       {
         class: "icon-btn",
         disabled: !tab.hostAddr.trim(),
-        title: tab.hostAddr.trim() ? `Open SSH to ${tab.hostAddr.trim()}` : "Fill in the host address first",
+        title: tab.hostAddr.trim()
+          ? `Open SSH to ${tab.sshUser.trim() ? `${tab.sshUser.trim()}@` : ""}${tab.hostAddr.trim()}`
+          : "Fill in the host address first",
         onclick: () => void store.openSsh(pane.id),
       },
       [sshIcon()],

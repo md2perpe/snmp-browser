@@ -938,6 +938,9 @@ button {
 .field-community {
   width: 110px;
 }
+.field-ssh-user {
+  width: 90px;
+}
 .field-runs {
   width: 72px;
 }
