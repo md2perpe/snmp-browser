@@ -2,13 +2,36 @@
 //! into a device's CLI (e.g. to fix a misconfigured community string or
 //! SNMPv3 credentials) without leaving the app to find a terminal themselves.
 //!
-//! There's no cross-platform API for "open a terminal running this command",
-//! so each platform gets its own strategy. Arguments are always passed as
-//! separate `Command` args, never interpolated into a shell string, so a
-//! host address containing shell metacharacters can't do anything beyond
-//! being (harmlessly) rejected by `ssh` itself as a bad hostname.
+//! Two things matter for the target audience (lab/test network equipment
+//! that gets reflashed and rotates its host key constantly):
+//!   1. The window must survive `ssh` exiting, whatever the reason - a
+//!      changed host key, a refused connection, a typo in the address - so
+//!      there's time to actually read the error instead of it flashing by.
+//!      That means running `ssh` inside an ordinary shell in the new window
+//!      rather than as the window's direct child process.
+//!   2. Host-key verification is turned off (`StrictHostKeyChecking=no`,
+//!      throwaway `UserKnownHostsFile`). This is the actual "changed key"
+//!      fix: without it, `ssh` refuses to connect at all once a device's key
+//!      no longer matches what's on file. That's the right tradeoff for
+//!      trusted internal equipment whose keys are *expected* to change, but
+//!      it does mean no protection against a real man-in-the-middle - don't
+//!      reuse this path for anything reached over an untrusted network.
+//!
+//! Where a shell has to parse the address (macOS's `do script`, the
+//! Linux/BSD fallback), it's embedded via POSIX single-quoting, which is
+//! immune to shell metacharacters regardless of what's typed into the
+//! Address field. Windows instead validates the address against a safe
+//! character set up front, since `cmd.exe`'s own command-line re-parsing
+//! can't be neutralized by quoting alone.
 
 use std::process::Command;
+
+/// Single-quotes `s` for safe embedding in a POSIX shell command line -
+/// immune to `$()`, backticks, `;`, `&&`, etc. regardless of `s`'s contents.
+#[cfg(not(target_os = "windows"))]
+fn posix_shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', r#"'\''"#))
+}
 
 pub fn open(host: &str) -> Result<(), String> {
     let host = host.trim();
@@ -18,45 +41,55 @@ pub fn open(host: &str) -> Result<(), String> {
 
     #[cfg(target_os = "macos")]
     {
-        // Terminal.app understands ssh:// URLs and opens a new window already
-        // running `ssh <host>`. Target it explicitly with `-a Terminal`
-        // rather than leaving the scheme to LaunchServices' default-handler
-        // resolution: any other ssh-capable app ever installed (iTerm2,
-        // electerm, ...) can also register for `ssh:`, and when several
-        // apps claim it with equal rank, `open ssh://host` alone can pick
-        // one arbitrarily and silently do nothing if it's stale/uninstalled.
-        return Command::new("open")
-            .args(["-a", "Terminal", &format!("ssh://{host}")])
-            .spawn()
-            .map(|_| ())
-            .map_err(|e| e.to_string());
+        // `do script` runs the command inside a normal login shell in a new
+        // Terminal window; unlike exec'ing `ssh` as the window's process
+        // directly (e.g. via an `ssh://` URL), the shell - and the window -
+        // stays open once `ssh` exits, letting the user actually read
+        // whatever it printed. Escaped once for the shell (single-quoting)
+        // and once more for AppleScript's string syntax.
+        let ssh_cmd = format!("ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {}", posix_shell_quote(host));
+        let escaped_for_applescript = ssh_cmd.replace('\\', "\\\\").replace('"', "\\\"");
+        let script = format!("tell application \"Terminal\" to do script \"{escaped_for_applescript}\"");
+        return Command::new("osascript").arg("-e").arg(script).spawn().map(|_| ()).map_err(|e| e.to_string());
     }
 
     #[cfg(target_os = "windows")]
     {
-        // Windows has no registered ssh:// handler, but 10 (1809+) and 11 ship
-        // OpenSSH's `ssh.exe` in the box. Spawn it directly with its own new
-        // console window rather than going through `cmd.exe /C`, which would
-        // let shell metacharacters in `host` be reinterpreted by cmd.
+        // Same reasoning as macOS: run through `cmd /K` (keeps the window
+        // open after the command finishes) rather than spawning `ssh.exe`
+        // as the console's direct process. That means `host` now flows
+        // through cmd.exe's own command-line parsing, which quoting can't
+        // fully neutralize - so restrict it to a safe character set instead
+        // of trying to escape it.
         use std::os::windows::process::CommandExt;
         const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
-        return Command::new("ssh").arg(host).creation_flags(CREATE_NEW_CONSOLE).spawn().map(|_| ()).map_err(|e| e.to_string());
+        if !host.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | ':' | '-' | '_' | '@')) {
+            return Err(format!("'{host}' has characters that aren't safe to pass through cmd.exe - stick to a plain hostname, IP, or user@host"));
+        }
+        let cmd_line = format!("ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=NUL {host}");
+        return Command::new("cmd").args(["/K", &cmd_line]).creation_flags(CREATE_NEW_CONSOLE).spawn().map(|_| ()).map_err(|e| e.to_string());
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         // Linux/BSD have no standard terminal or ssh-URL handler, so try a
         // handful of common terminal emulators in turn and go with whichever
-        // one actually exists.
+        // one actually exists. Each is told to exec `sh -c '<ssh cmd>; ...'`
+        // rather than `ssh` directly, again so the window survives `ssh`
+        // exiting instead of closing the instant it does.
+        let shell_cmd = format!(
+            "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {}; echo; echo '[ssh exited - press Enter to close]'; read _",
+            posix_shell_quote(host)
+        );
         const CANDIDATES: &[(&str, &[&str])] = &[
-            ("x-terminal-emulator", &["-e", "ssh"]),
-            ("gnome-terminal", &["--", "ssh"]),
-            ("konsole", &["-e", "ssh"]),
-            ("xfce4-terminal", &["-x", "ssh"]),
-            ("xterm", &["-e", "ssh"]),
+            ("x-terminal-emulator", &["-e"]),
+            ("gnome-terminal", &["--"]),
+            ("konsole", &["-e"]),
+            ("xfce4-terminal", &["-x"]),
+            ("xterm", &["-e"]),
         ];
         for (cmd, args) in CANDIDATES {
-            if Command::new(cmd).args(*args).arg(host).spawn().is_ok() {
+            if Command::new(cmd).args(*args).args(["sh", "-c", &shell_cmd]).spawn().is_ok() {
                 return Ok(());
             }
         }
