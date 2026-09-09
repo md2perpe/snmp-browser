@@ -415,14 +415,13 @@ export interface AppState {
   theme: Theme;
   /** Theme picker dropdown; null when closed. */
   themeMenu: { x: number; y: number } | null;
-  /** Set once `checkForUpdate()` finds a newer published GitHub release than the running version; null otherwise (including "not checked yet" and "dismissed"). */
-  updateInfo: UpdateInfo | null;
+  /** State of the in-app auto-updater (see update.ts); null until a check finds something worth showing. */
+  updateStatus: UpdateStatus | null;
 }
 
-/** A newer release found on GitHub, for the sidebar's update notice. */
-export interface UpdateInfo {
-  /** e.g. "0.1.6", without the "v" tag prefix. */
-  version: string;
-  /** Release page URL to open in the user's browser. */
-  url: string;
-}
+/** Lifecycle of an in-app update, driving the sidebar's update icon. */
+export type UpdateStatus =
+  | { phase: "available"; version: string; body: string | null }
+  | { phase: "downloading"; version: string; downloaded: number; contentLength: number | null }
+  | { phase: "ready"; version: string }
+  | { phase: "error"; message: string };

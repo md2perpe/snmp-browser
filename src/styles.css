@@ -161,6 +161,35 @@ button {
 .update-available-btn:hover {
   color: var(--accent);
 }
+.update-downloading-btn {
+  cursor: default;
+}
+.update-downloading-btn:hover {
+  background: transparent;
+}
+.update-downloading-btn svg {
+  animation: update-downloading-spin 1.2s linear infinite;
+}
+@keyframes update-downloading-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .update-downloading-btn svg {
+    animation: none;
+  }
+}
+
+.update-error-btn {
+  color: var(--red);
+}
+.update-error-btn:hover {
+  color: var(--red);
+}
 
 .sidebar-rail {
   width: 30px;

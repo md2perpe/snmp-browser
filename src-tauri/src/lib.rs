@@ -428,7 +428,10 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_process::init())
         .setup(|app| {
+            #[cfg(desktop)]
+            app.handle().plugin(tauri_plugin_updater::Builder::new().build())?;
             let settings_path = app.path().app_config_dir()?.join("settings.json");
             let settings = settings::load(&settings_path);
             // Write it back immediately so a fresh install gets a settings.json

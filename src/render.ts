@@ -1,4 +1,3 @@
-import { openUrl } from "@tauri-apps/plugin-opener";
 import { el, startDrag, startDragY, svgIcon } from "./dom";
 import { exportTableCsv, exportTablePng } from "./export";
 import { DEFAULT_COL_WIDTH } from "./mockData";
@@ -76,30 +75,76 @@ function openThemeMenu(store: Store, e: MouseEvent) {
   store.toggleThemeMenu(rect.left, rect.bottom + 4);
 }
 
-/** Circled-up-arrow icon, used for the "new version available" notice. */
+/** Circled-up-arrow icon, used for the "new version available" notice, and (spinning, via CSS) while it downloads. */
 function updateAvailableIcon(): SVGSVGElement {
   return svgIcon('<circle cx="12" cy="12" r="10"/><path d="M12 16V8"/><path d="M8 12l4-4 4 4"/>');
 }
 
+/** Circular-arrow "restart" icon, used once a downloaded update is installed and waiting for a relaunch. */
+function updateReadyIcon(): SVGSVGElement {
+  return svgIcon('<path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/>');
+}
+
+/** Alert-triangle icon, used when a download/install attempt failed. */
+function updateErrorIcon(): SVGSVGElement {
+  return svgIcon(
+    '<path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
+  );
+}
+
 /**
- * Icon button shown once `checkForUpdate()` (see update.ts) finds a newer
- * published GitHub release than the running version; null otherwise. Click
- * opens the release page in the user's default browser; middle/right-click
- * (and everything else) does nothing special, so a stray click can't
- * accidentally dismiss it.
+ * Icon button reflecting `store.state.updateStatus` (see update.ts and
+ * `installUpdate()`/`relaunchForUpdate()` in state.ts); null while there's
+ * nothing to show. Each phase's click does the next step in the flow -
+ * download, then relaunch - so getting the update running never takes more
+ * than two clicks, each one explicit.
  */
 function renderUpdateButton(store: Store): HTMLElement | null {
-  const info = store.state.updateInfo;
-  if (!info) return null;
-  return el(
-    "button",
-    {
-      class: "icon-btn update-available-btn",
-      title: `Version ${info.version} is available - click to view the release`,
-      onclick: () => void openUrl(info.url),
-    },
-    [updateAvailableIcon()],
-  );
+  const status = store.state.updateStatus;
+  if (!status) return null;
+  switch (status.phase) {
+    case "available":
+      return el(
+        "button",
+        {
+          class: "icon-btn update-available-btn",
+          title: `Version ${status.version} is available - click to download and install`,
+          onclick: () => void store.installUpdate(),
+        },
+        [updateAvailableIcon()],
+      );
+    case "downloading": {
+      const pct = status.contentLength ? Math.min(100, Math.round((status.downloaded / status.contentLength) * 100)) : null;
+      return el(
+        "button",
+        {
+          class: "icon-btn update-available-btn update-downloading-btn",
+          title: pct == null ? `Downloading version ${status.version}...` : `Downloading version ${status.version}... ${pct}%`,
+        },
+        [updateAvailableIcon()],
+      );
+    }
+    case "ready":
+      return el(
+        "button",
+        {
+          class: "icon-btn update-available-btn",
+          title: `Version ${status.version} is installed - click to restart and finish updating`,
+          onclick: () => void store.relaunchForUpdate(),
+        },
+        [updateReadyIcon()],
+      );
+    case "error":
+      return el(
+        "button",
+        {
+          class: "icon-btn update-error-btn",
+          title: `Update failed: ${status.message} - click to retry`,
+          onclick: () => store.retryUpdate(),
+        },
+        [updateErrorIcon()],
+      );
+  }
 }
 
 const AUTO_REFRESH_RING_RADIUS = 9;
