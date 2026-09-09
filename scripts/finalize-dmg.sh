@@ -15,6 +15,10 @@
 #      stick in this environment, so we redo it ourselves and take it over.
 #   3. Sets the volume's icon (shown once mounted) and the .dmg file's own
 #      Finder icon (shown before mounting) to the app's icon.
+#   4. Renames the .dmg to append a build timestamp and git commit id, so
+#      successive local builds (which otherwise all share the same
+#      version-based name from `tauri build`) don't overwrite each other and
+#      can be traced back to the exact commit they were built from.
 #
 # Usage: scripts/finalize-dmg.sh path/to/App.dmg [path/to/icon.icns]
 set -euo pipefail
@@ -148,5 +152,13 @@ sips -i "$ICNS_SCRATCH" >/dev/null
 DeRez -only icns "$ICNS_SCRATCH" > "$ICON_RSRC"
 Rez -append "$ICON_RSRC" -o "$DMG"
 SetFile -a C "$DMG"
+
+TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
+COMMIT="$(git -C "$(dirname "$0")" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+DMG_DIR="$(dirname "$DMG")"
+DMG_BASE="$(basename "$DMG" .dmg)"
+TAGGED_DMG="$DMG_DIR/${DMG_BASE}_${TIMESTAMP}_${COMMIT}.dmg"
+mv "$DMG" "$TAGGED_DMG"
+DMG="$TAGGED_DMG"
 
 echo "Finalized: $DMG"
