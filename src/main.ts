@@ -15,6 +15,10 @@ store.onTick(() => updateAutoRefreshRings(store, root!));
 render();
 void store.init();
 
+// Elements with a custom context menu already call preventDefault() themselves;
+// this suppresses the native browser menu everywhere else.
+window.addEventListener("contextmenu", (e) => e.preventDefault());
+
 // Cycle the active pane's tabs with the usual tab-switching shortcuts:
 // Ctrl+Tab / Ctrl+Shift+Tab (Windows/Linux convention, also common on Mac),
 // and Cmd+Shift+] / Cmd+Shift+[ (Safari/Chrome's Mac convention).
