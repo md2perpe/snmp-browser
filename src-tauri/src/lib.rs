@@ -2,6 +2,7 @@ pub mod gnmi;
 pub mod mib;
 pub mod settings;
 pub mod snmp;
+pub mod ssh;
 pub mod trap;
 pub mod yang;
 
@@ -303,6 +304,11 @@ fn write_export_file(path: String, data: Vec<u8>) -> Result<(), String> {
     std::fs::write(&path, data).map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+fn open_ssh(host: String) -> Result<(), String> {
+    ssh::open(&host)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -349,7 +355,8 @@ pub fn run() {
             local_ips,
             gnmi_capabilities,
             gnmi_get,
-            write_export_file
+            write_export_file,
+            open_ssh
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

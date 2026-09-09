@@ -1157,6 +1157,20 @@ export class Store {
     this.notify();
   }
 
+  /** "Open SSH" toolbar click - launches a terminal running `ssh <host>` against the pane's active tab's target. */
+  async openSsh(paneId: string) {
+    const pane = this.getPane(paneId);
+    if (!pane) return;
+    const tab = this.getPaneActiveTab(pane);
+    if (!tab || tab.kind !== "query" || !tab.hostAddr.trim()) return;
+    try {
+      await invoke<void>("open_ssh", { host: tab.hostAddr.trim() });
+    } catch (e) {
+      tab.fetchError = errorMessage(e);
+      this.notify();
+    }
+  }
+
   private async runFetch(tab: TabState) {
     const node = this.findNode(this.activeTree(), tab.selectedNode);
     if (!this.canFetch(node)) {

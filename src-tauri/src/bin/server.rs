@@ -5,7 +5,7 @@
 //! with CORS enabled so a Vite dev server on a different port can call it.
 
 use serde_json::{json, Value};
-use snmp_mib_client_lib::{gnmi, mib, settings, snmp, trap, yang};
+use snmp_mib_client_lib::{gnmi, mib, settings, snmp, ssh, trap, yang};
 use std::io::Read;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -341,6 +341,11 @@ fn handle(state: &AppState, rt: &tokio::runtime::Runtime, cmd: &str, args: &Valu
             let data: Vec<u8> = serde_json::from_value(args.get("data").cloned().ok_or((400, "missing 'data'".to_string()))?)
                 .map_err(|e| (400, e.to_string()))?;
             std::fs::write(&path, data).map(|_| Value::Null).map_err(|e| (400, e.to_string()))
+        }
+
+        "open_ssh" => {
+            let host = args.get("host").and_then(Value::as_str).ok_or((400, "missing 'host'".to_string()))?;
+            ssh::open(host).map(|_| Value::Null).map_err(|e| (400, e))
         }
 
         other => Err((404, format!("unknown command '{other}'"))),

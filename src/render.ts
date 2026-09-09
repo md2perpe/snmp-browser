@@ -55,6 +55,11 @@ function gnmiTabIcon(): SVGSVGElement {
   );
 }
 
+/** Terminal-prompt icon, used for the "open SSH" toolbar button. */
+function sshIcon(): SVGSVGElement {
+  return svgIcon('<rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 4 3-4 3"/><path d="M13 15h4"/>');
+}
+
 /** Paint-palette icon, used for the theme picker. */
 function paletteIcon(): SVGSVGElement {
   return svgIcon(
@@ -717,6 +722,16 @@ function renderToolbar(store: Store, pane: PaneState, tab: TabState): HTMLElemen
         oninput: (e: Event) => store.updateActiveTabInPane(pane.id, { hostAddr: (e.target as HTMLInputElement).value }),
       }),
     ]),
+    el(
+      "button",
+      {
+        class: "icon-btn",
+        disabled: !tab.hostAddr.trim(),
+        title: tab.hostAddr.trim() ? `Open SSH to ${tab.hostAddr.trim()}` : "Fill in the host address first",
+        onclick: () => void store.openSsh(pane.id),
+      },
+      [sshIcon()],
+    ),
     el("div", { class: "field" }, [
       el("label", { class: "field-label" }, ["Port"]),
       el("input", {
