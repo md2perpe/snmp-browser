@@ -115,8 +115,6 @@ export interface TabState {
   v3User: string;
   v3Auth: string;
   v3Priv: string;
-  /** Username for the "Open SSH" toolbar button - independent of the SNMP v3 security user, since the two are usually unrelated logins. Defaults to "admin", the common default on network equipment. */
-  sshUser: string;
   selectedNode: string;
   /** Column order from the last successful fetch; empty until the first fetch. */
   columns: string[];
@@ -338,6 +336,8 @@ export interface AppState {
   theme: Theme;
   /** Theme picker dropdown; null when closed. */
   themeMenu: { x: number; y: number } | null;
+  /** "Open SSH" username prompt for a pane's active tab; null when closed. */
+  sshPrompt: { paneId: string; host: string; user: string } | null;
   /** Set once `checkForUpdate()` finds a newer published GitHub release than the running version; null otherwise (including "not checked yet" and "dismissed"). */
   updateInfo: UpdateInfo | null;
 }

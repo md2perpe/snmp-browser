@@ -51,6 +51,8 @@ const UPDATE_CHECK_INTERVAL_MS = 60 * 60 * 1000;
 const MAX_CLIENT_TRAP_EVENTS = 2000;
 const THEME_STORAGE_KEY = "snmpBrowserTheme";
 const LAST_ADDR_STORAGE_KEY = "snmpBrowserLastAddr";
+const LAST_SSH_USER_STORAGE_KEY = "snmpBrowserLastSshUser";
+const DEFAULT_SSH_USER = "admin";
 const DEFAULT_BENCHMARK_ITERATIONS = 10;
 const MAX_BENCHMARK_ITERATIONS = 1000;
 
@@ -70,6 +72,23 @@ function saveLastAddr(addr: string) {
     localStorage.setItem(LAST_ADDR_STORAGE_KEY, addr);
   } catch {
     // localStorage unavailable - the last-used address just won't persist across restarts.
+  }
+}
+
+/** The username most recently used for the "Open SSH" prompt, to pre-fill it next time - falls back to "admin", the common default on network equipment. Persisted so it survives restarts. */
+function loadLastSshUser(): string {
+  try {
+    return localStorage.getItem(LAST_SSH_USER_STORAGE_KEY) || DEFAULT_SSH_USER;
+  } catch {
+    return DEFAULT_SSH_USER;
+  }
+}
+
+function saveLastSshUser(user: string) {
+  try {
+    localStorage.setItem(LAST_SSH_USER_STORAGE_KEY, user);
+  } catch {
+    // localStorage unavailable - the last-used SSH user just won't persist across restarts.
   }
 }
 
@@ -151,6 +170,9 @@ export class Store {
    * tabs of either kind. Persisted so it survives restarts. */
   private lastUsedAddr: string = loadLastAddr();
 
+  /** Username most recently used in the "Open SSH" prompt, to pre-fill it next time. Persisted so it survives restarts. */
+  private lastUsedSshUser: string = loadLastSshUser();
+
   /** Iteration count the next benchmark tab opens with - the last one the user picked. */
   private benchmarkIterations = DEFAULT_BENCHMARK_ITERATIONS;
 
@@ -200,6 +222,7 @@ export class Store {
       theme: loadTheme(),
       themeMenu: null,
       updateInfo: null,
+      sshPrompt: null,
     };
     this.applyTheme(this.state.theme);
   }
@@ -283,7 +306,6 @@ export class Store {
       v3User: h?.v3User ?? "",
       v3Auth: "",
       v3Priv: "",
-      sshUser: "admin",
       selectedNode: "",
       columns: [],
       displayHints: {},
@@ -1158,19 +1180,40 @@ export class Store {
     this.notify();
   }
 
-  /** "Open SSH" toolbar click - launches a terminal running `ssh [user@]<host>` against the pane's active tab's target. */
-  async openSsh(paneId: string) {
+  /** "Open SSH" toolbar click - opens the username prompt for the pane's active tab's target address. */
+  openSshPrompt(paneId: string) {
     const pane = this.getPane(paneId);
     if (!pane) return;
     const tab = this.getPaneActiveTab(pane);
     if (!tab || tab.kind !== "query" || !tab.hostAddr.trim()) return;
-    const user = tab.sshUser.trim();
-    const target = user ? `${user}@${tab.hostAddr.trim()}` : tab.hostAddr.trim();
+    this.state.sshPrompt = { paneId, host: tab.hostAddr.trim(), user: this.lastUsedSshUser };
+    this.notify();
+  }
+
+  closeSshPrompt() {
+    this.state.sshPrompt = null;
+    this.notify();
+  }
+
+  /** Confirms the "Open SSH" prompt - launches a terminal running `ssh [user@]<host>`. */
+  async confirmSshPrompt(user: string) {
+    const prompt = this.state.sshPrompt;
+    if (!prompt) return;
+    const trimmedUser = user.trim();
+    this.lastUsedSshUser = trimmedUser || DEFAULT_SSH_USER;
+    saveLastSshUser(this.lastUsedSshUser);
+    const target = trimmedUser ? `${trimmedUser}@${prompt.host}` : prompt.host;
+    this.state.sshPrompt = null;
+    this.notify();
+    const pane = this.getPane(prompt.paneId);
+    const tab = pane && this.getPaneActiveTab(pane);
     try {
       await invoke<void>("open_ssh", { host: target });
     } catch (e) {
-      tab.fetchError = errorMessage(e);
-      this.notify();
+      if (tab && tab.kind === "query") {
+        tab.fetchError = errorMessage(e);
+        this.notify();
+      }
     }
   }
 

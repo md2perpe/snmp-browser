@@ -407,6 +407,38 @@ button {
   border-radius: 8px;
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
 }
+.modal-panel-narrow {
+  width: 320px;
+}
+.modal-footer {
+  flex: none;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--border-soft);
+}
+.modal-btn {
+  height: 30px;
+  padding: 0 14px;
+  border-radius: 6px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.modal-btn:hover {
+  background: var(--hover-weak);
+  color: var(--text-primary);
+}
+.modal-btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
 .modal-header {
   flex: none;
   display: flex;
@@ -923,6 +955,10 @@ button {
 .field-mono {
   font-family: ui-monospace, Menlo, monospace;
 }
+.ssh-user-prompt-input {
+  width: 100%;
+  box-sizing: border-box;
+}
 .field-addr {
   width: 140px;
 }
@@ -937,9 +973,6 @@ button {
 }
 .field-community {
   width: 110px;
-}
-.field-ssh-user {
-  width: 90px;
 }
 .field-runs {
   width: 72px;

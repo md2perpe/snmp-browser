@@ -481,6 +481,44 @@ function renderParseErrorsModal(title: string, errors: FileErrors[], onClose: ()
   ]);
 }
 
+/** "Open SSH" username prompt, shown before actually launching a terminal - lets the user pick the login (defaulting to the last one used, or "admin") without cluttering the SNMP toolbar with an SSH-only field. */
+function renderSshPromptModal(store: Store): HTMLElement | null {
+  const prompt = store.state.sshPrompt;
+  if (!prompt) return null;
+
+  const submit = () => {
+    const input = document.querySelector<HTMLInputElement>(".ssh-user-prompt-input");
+    void store.confirmSshPrompt(input?.value ?? prompt.user);
+  };
+
+  return el("div", { class: "modal-overlay", onclick: () => store.closeSshPrompt() }, [
+    el("div", { class: "modal-panel modal-panel-narrow", onclick: (e: Event) => e.stopPropagation() }, [
+      el("div", { class: "modal-header" }, [
+        el("div", { class: "modal-title" }, [`Open SSH to ${prompt.host}`]),
+        el("button", { class: "icon-btn", title: "Close", onclick: () => store.closeSshPrompt() }, ["✕"]),
+      ]),
+      el("div", { class: "modal-body" }, [
+        el("div", { class: "field" }, [
+          el("label", { class: "field-label" }, ["Username"]),
+          el("input", {
+            class: "field-input ssh-user-prompt-input",
+            value: prompt.user,
+            placeholder: "admin",
+            onkeydown: (e: KeyboardEvent) => {
+              if (e.key === "Enter") submit();
+              if (e.key === "Escape") store.closeSshPrompt();
+            },
+          }),
+        ]),
+      ]),
+      el("div", { class: "modal-footer" }, [
+        el("button", { class: "modal-btn", onclick: () => store.closeSshPrompt() }, ["Cancel"]),
+        el("button", { class: "modal-btn modal-btn-primary", onclick: submit }, ["Connect"]),
+      ]),
+    ]),
+  ]);
+}
+
 function mibTreeContextMenuItems(store: Store, nodeId: string): HTMLElement[] {
   const node = store.findNode(store.activeTree(), nodeId);
 
@@ -722,25 +760,24 @@ function renderToolbar(store: Store, pane: PaneState, tab: TabState): HTMLElemen
         oninput: (e: Event) => store.updateActiveTabInPane(pane.id, { hostAddr: (e.target as HTMLInputElement).value }),
       }),
     ]),
-    el("div", { class: "field" }, [
-      el("label", { class: "field-label" }, ["SSH User"]),
-      el("input", {
-        class: "field-input field-ssh-user field-mono",
-        value: tab.sshUser,
-        placeholder: "admin",
-        "data-focus-key": `tab:${tab.id}:sshuser`,
-        oninput: (e: Event) => store.updateActiveTabInPane(pane.id, { sshUser: (e.target as HTMLInputElement).value }),
-      }),
-    ]),
     el(
       "button",
       {
         class: "icon-btn",
         disabled: !tab.hostAddr.trim(),
-        title: tab.hostAddr.trim()
-          ? `Open SSH to ${tab.sshUser.trim() ? `${tab.sshUser.trim()}@` : ""}${tab.hostAddr.trim()}`
-          : "Fill in the host address first",
-        onclick: () => void store.openSsh(pane.id),
+        title: tab.hostAddr.trim() ? `Open SSH to ${tab.hostAddr.trim()}` : "Fill in the host address first",
+        onclick: () => {
+          store.openSshPrompt(pane.id);
+          // Deferred a frame: focusing synchronously here loses to the
+          // browser's own post-click focus handling once this button (the
+          // click's actual target) is removed from the DOM by the re-render
+          // this triggers, which otherwise leaves the prompt unfocused.
+          requestAnimationFrame(() => {
+            const input = document.querySelector<HTMLInputElement>(".ssh-user-prompt-input");
+            input?.focus();
+            input?.select();
+          });
+        },
       },
       [sshIcon()],
     ),
@@ -2276,6 +2313,8 @@ export function renderApp(store: Store): HTMLElement {
   if (exportMenu) overlays.push(exportMenu);
   const themeMenu = renderThemeMenu(store);
   if (themeMenu) overlays.push(themeMenu);
+  const sshPromptModal = renderSshPromptModal(store);
+  if (sshPromptModal) overlays.push(sshPromptModal);
   if (overlays.length === 0) return appBody;
 
   // Wrapped in a `display: contents` div so fixed-position overlays sit
