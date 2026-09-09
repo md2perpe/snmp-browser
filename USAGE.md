@@ -149,8 +149,12 @@ To query a target:
 - Fill in **Address**, **Port** (defaults to `57400`), and **TLS** mode
   (**Insecure**, **TLS**, or **Skip Verify** for a self-signed certificate
   the target can't otherwise be verified against — providing a **CA Cert
-  Path** switches back to full verification). **Username**/**Password** are
-  optional, for targets that require them.
+  Path** switches back to full verification). **Skip Verify** accepts any
+  server certificate and disables certificate validation, so prefer **CA
+  Cert Path** for self-signed targets when possible. **Username**/**Password**
+  are optional, for targets that require them — avoid **Insecure** when
+  credentials are set, since it sends them, and all other traffic,
+  unencrypted; use **TLS** (with certificate validation) instead.
 - Click **Capabilities** to see the target's advertised gNMI version,
   encodings, and supported YANG models.
 - Type a path into the **Path** field (e.g.
