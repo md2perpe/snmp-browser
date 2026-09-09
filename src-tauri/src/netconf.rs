@@ -29,6 +29,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
+/// Caps how large an assembled message may grow before `read_message` gives up - without this, a
+/// peer that never sends a completing EOM marker/chunk terminator could grow `leftover` without
+/// bound by trickling `ChannelMsg::Data` indefinitely, exhausting memory.
+const MAX_MESSAGE_BYTES: usize = 64 * 1024 * 1024;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -119,9 +123,15 @@ async fn connect(p: &NetconfConnectionParams) -> Result<(client::Handle<Client>,
         .await
         .map_err(|e| format!("failed to request the 'netconf' SSH subsystem: {e}"))?;
 
+    // Same overall-deadline-plus-size-cap reasoning as `read_message` applies here: a peer could
+    // otherwise stall the subsystem-start confirmation indefinitely while flooding `leftover`.
+    let subsystem_deadline = tokio::time::Instant::now() + REQUEST_TIMEOUT;
     let mut leftover = Vec::new();
     loop {
-        let event = tokio::time::timeout(REQUEST_TIMEOUT, channel.wait())
+        if leftover.len() > MAX_MESSAGE_BYTES {
+            return Err(format!("target sent more than {MAX_MESSAGE_BYTES} bytes before the 'netconf' subsystem started"));
+        }
+        let event = tokio::time::timeout_at(subsystem_deadline, channel.wait())
             .await
             .map_err(|_| "timed out waiting for the 'netconf' subsystem to start".to_string())?
             .ok_or_else(|| "SSH channel closed before the 'netconf' subsystem started".to_string())?;
@@ -224,8 +234,13 @@ fn try_parse_chunked(buf: &[u8]) -> Result<Option<(Vec<u8>, usize)>, String> {
 }
 
 /// Reads one complete framed message from `channel`, consuming and updating `leftover` (bytes
-/// already read from the channel that haven't been claimed by a previous message).
+/// already read from the channel that haven't been claimed by a previous message). Bounded by a
+/// single overall deadline computed once up front - unlike re-arming `REQUEST_TIMEOUT` on every
+/// `ChannelMsg::Data` event, which would let a peer that trickles data just fast enough to beat
+/// each individual timeout stall the request indefinitely - and by `MAX_MESSAGE_BYTES`, so a peer
+/// that never completes a message can't hang the request or exhaust memory either way.
 async fn read_message(channel: &mut Channel<Msg>, framing: Framing, leftover: &mut Vec<u8>) -> Result<Vec<u8>, String> {
+    let deadline = tokio::time::Instant::now() + REQUEST_TIMEOUT;
     loop {
         match framing {
             Framing::Eom => {
@@ -242,7 +257,10 @@ async fn read_message(channel: &mut Channel<Msg>, framing: Framing, leftover: &m
                 }
             }
         }
-        let event = tokio::time::timeout(REQUEST_TIMEOUT, channel.wait())
+        if leftover.len() > MAX_MESSAGE_BYTES {
+            return Err(format!("NETCONF response exceeded the {MAX_MESSAGE_BYTES}-byte limit without completing"));
+        }
+        let event = tokio::time::timeout_at(deadline, channel.wait())
             .await
             .map_err(|_| "timed out waiting for a NETCONF response".to_string())?
             .ok_or_else(|| "SSH channel closed before a complete NETCONF message was received".to_string())?;
@@ -314,7 +332,9 @@ fn parse_hello(xml: &str) -> Result<(Vec<String>, String), String> {
 
 /// Scans a path for `prefix:` qualifiers (e.g. the `org-openroadm-device` in
 /// `org-openroadm-device:circuit-packs`), skipping over quoted predicate values so a value like
-/// `[name='eth0:1']` doesn't get misread as a qualifier. Order-preserving and de-duplicated.
+/// `[name='eth0:1']` doesn't get misread as a qualifier, and over an XPath axis step's `::` (e.g.
+/// `child` in `/child::oc-if:interfaces`) so that isn't misread as a qualifier either. Order-
+/// preserving and de-duplicated.
 fn collect_module_prefixes(path: &str) -> Vec<String> {
     let mut out = Vec::new();
     let bytes = path.as_bytes();
@@ -339,7 +359,7 @@ fn collect_module_prefixes(path: &str) -> Vec<String> {
                 while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_' || bytes[i] == b'-') {
                     i += 1;
                 }
-                if bytes.get(i) == Some(&b':') {
+                if bytes.get(i) == Some(&b':') && bytes.get(i + 1) != Some(&b':') {
                     let prefix = path[start..i].to_string();
                     if !out.contains(&prefix) {
                         out.push(prefix);
@@ -511,6 +531,13 @@ mod tests {
     #[test]
     fn collects_module_prefixes_while_ignoring_a_colon_inside_a_quoted_value() {
         let prefixes = collect_module_prefixes("/oc-if:interfaces/oc-if:interface[oc-if:name='eth0:1']");
+        assert_eq!(prefixes, vec!["oc-if".to_string()]);
+    }
+
+    #[test]
+    fn collects_module_prefixes_while_ignoring_an_xpath_axis_steps_double_colon() {
+        // `child::` is a valid XPath axis step, not a `child`-prefixed qualifier.
+        let prefixes = collect_module_prefixes("/child::oc-if:interfaces");
         assert_eq!(prefixes, vec!["oc-if".to_string()]);
     }
 
