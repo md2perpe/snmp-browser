@@ -49,8 +49,10 @@ pub struct YangParseResult {
     pub tree: Vec<YangTreeNode>,
     pub errors: Vec<FileErrors>,
     pub dir_files: Vec<DirFiles>,
-    /// Module name -> its declared `namespace` URI, for every parsed module that has one
-    /// (a `submodule` has none of its own - see `belongs-to`). Consumed by `netconf.rs` to bind
+    /// Module name -> namespace URI, for every parsed module and submodule. A `module` maps to
+    /// its own declared `namespace`; a `submodule` has no `namespace` of its own, so it maps to
+    /// its `belongs-to` parent module's namespace instead (falling back to omission if that
+    /// parent wasn't parsed, e.g. missing from the directory). Consumed by `netconf.rs` to bind
     /// `xmlns` prefixes when turning a tree path (`module-name:node-name`) into an XPath filter,
     /// the NETCONF-side counterpart to how gNMI just sends the module-qualified path as-is.
     pub module_namespaces: HashMap<String, String>,
@@ -66,6 +68,9 @@ struct ModuleInfo<'a> {
     root: Node<'a>,
     imports: HashMap<String, String>,
     namespace: String,
+    /// The module named by this submodule's `belongs-to`, or `None` for a `module` (which has no
+    /// `belongs-to` of its own and owns its `namespace` directly).
+    belongs_to: Option<String>,
     src: &'a [u8],
 }
 
@@ -263,9 +268,12 @@ pub fn parse_directories(dirs: &[String]) -> YangParseResult {
         }
 
         let namespace = find_child_by_kind(module_node, "namespace_stmt").and_then(|n| n.child_by_field_name("arg")).map(|n| arg_text(n, src)).unwrap_or_default();
+        let belongs_to = (module_node.kind() == "submodule_stmt")
+            .then(|| find_child_by_kind(module_node, "belongs_to_stmt").and_then(|n| n.child_by_field_name("arg")).map(|n| arg_text(n, src)))
+            .flatten();
 
         collect_groupings(module_node, src, &name, &mut groupings);
-        modules.push(ModuleInfo { name, root: module_node, imports, namespace, src });
+        modules.push(ModuleInfo { name, root: module_node, imports, namespace, belongs_to, src });
     }
 
     let mut tree = Vec::new();
@@ -276,6 +284,16 @@ pub fn parse_directories(dirs: &[String]) -> YangParseResult {
         tree.push(YangTreeNode { id: format!("yang:{}", m.name), label: m.name.clone(), path: "/".to_string(), resolved: true, kind: NodeKind::Group, children });
         if !m.namespace.is_empty() {
             module_namespaces.insert(m.name.clone(), m.namespace.clone());
+        }
+    }
+    // A submodule declares no `namespace` of its own - its data nodes live in the namespace of
+    // the module it `belongs-to`. Map the submodule's own name to that parent's namespace so a
+    // path through a submodule-declared node still resolves to a real `xmlns:` binding.
+    for m in &modules {
+        if let Some(parent) = &m.belongs_to {
+            if let Some(namespace) = module_namespaces.get(parent).cloned() {
+                module_namespaces.insert(m.name.clone(), namespace);
+            }
         }
     }
 
@@ -421,5 +439,56 @@ module example-lonely {
         assert_eq!(placeholder.label, "uses missing-grouping");
         assert!(!placeholder.resolved);
         assert_eq!(placeholder.path, "");
+    }
+
+    #[test]
+    fn a_submodule_top_level_node_maps_to_its_parent_modules_namespace() {
+        // A submodule declares no `namespace` of its own; its data nodes are qualified with the
+        // *submodule's* own name (per this app's Phase 1 "every path segment is qualified with
+        // its owning module" rule - see the file doc comment), so `module_namespaces` must still
+        // resolve that name back to the parent module's namespace, or `get_rpc_xml` can't bind an
+        // `xmlns:` prefix for it.
+        let dir = tempfile::tempdir().unwrap();
+        write(
+            dir.path(),
+            "example-device.yang",
+            r#"
+module example-device {
+    namespace "urn:example:device";
+    prefix dev;
+
+    include example-device-ports;
+}
+"#,
+        );
+        write(
+            dir.path(),
+            "example-device-ports.yang",
+            r#"
+submodule example-device-ports {
+    belongs-to example-device {
+        prefix dev;
+    }
+
+    container ports {
+        leaf count {
+            type uint32;
+        }
+    }
+}
+"#,
+        );
+
+        let result = parse_directories(&[dir.path().display().to_string()]);
+        assert!(result.errors.is_empty(), "unexpected parse errors: {:?}", result.errors);
+
+        let submodule = result.tree.iter().find(|n| n.label == "example-device-ports").expect("submodule root");
+        let ports = submodule.children.iter().find(|n| n.label == "ports").expect("ports container");
+        assert_eq!(ports.path, "/example-device-ports:ports");
+
+        assert_eq!(result.module_namespaces.get("example-device-ports").map(String::as_str), Some("urn:example:device"));
+
+        let xml = crate::netconf::get_rpc_xml(&ports.path, true, &result.module_namespaces).expect("path through a submodule node should resolve to a namespace");
+        assert!(xml.contains(r#"xmlns:example-device-ports="urn:example:device""#));
     }
 }

@@ -691,7 +691,7 @@ function renderSplitterH(onMouseDown: (e: MouseEvent) => void): HTMLElement {
 /** A collapsible sidebar section's header row: a rotating caret plus its label, click anywhere on
  * the row to toggle. Shared by the "SNMP (MIB)", "YANG (gNMI)", and "YANG (NETCONF)" sections. */
 function sidebarSectionHead(label: string, collapsed: boolean, onToggle: () => void): HTMLElement {
-  return el("div", { class: "sidebar-section-head", onclick: onToggle }, [
+  return el("button", { type: "button", class: "sidebar-section-head", "aria-expanded": collapsed ? "false" : "true", onclick: onToggle }, [
     el("div", { class: "sidebar-section-caret", style: { transform: `rotate(${collapsed ? 0 : 90}deg)` } }, ["▶"]),
     el("span", {}, [label]),
   ]);
@@ -2655,13 +2655,17 @@ function renderNetconfToolbar(store: Store, pane: PaneState, tab: NetconfTabStat
   return el("div", { class: "toolbar" }, [el("div", { class: "toolbar-row" }, fields), pathRow]);
 }
 
-/** Stable identity for a NETCONF result node's expand/collapse state, mirroring `gnmiNodeKey`. */
-function netconfNodeKey(parentKey: string, node: NetconfNode): string {
-  return parentKey ? `${parentKey}/${node.name}` : node.name;
+/** Stable identity for a NETCONF result node's expand/collapse state. Unlike `gnmiNodeKey` (whose
+ * gNMI path elements already carry list keys), this includes the sibling index: an XML `<get>`
+ * reply repeats element names for list entries (e.g. two `<interface>` under `<interfaces>`), so
+ * the name alone isn't unique among siblings. */
+function netconfNodeKey(parentKey: string, node: NetconfNode, index: number): string {
+  const self = `${node.name}[${index}]`;
+  return parentKey ? `${parentKey}/${self}` : self;
 }
 
-function renderNetconfNode(store: Store, pane: PaneState, tab: NetconfTabState, node: NetconfNode, parentKey: string, depth: number): HTMLElement[] {
-  const key = netconfNodeKey(parentKey, node);
+function renderNetconfNode(store: Store, pane: PaneState, tab: NetconfTabState, node: NetconfNode, parentKey: string, depth: number, index: number): HTMLElement[] {
+  const key = netconfNodeKey(parentKey, node, index);
   const hasChildren = node.children.length > 0;
   const expanded = !!tab.expandedIds[key];
   const row = el(
@@ -2695,7 +2699,7 @@ function renderNetconfNode(store: Store, pane: PaneState, tab: NetconfTabState, 
   );
   const out: HTMLElement[] = [row];
   if (hasChildren && expanded) {
-    for (const child of node.children) out.push(...renderNetconfNode(store, pane, tab, child, key, depth + 1));
+    node.children.forEach((child, childIndex) => out.push(...renderNetconfNode(store, pane, tab, child, key, depth + 1, childIndex)));
   }
   return out;
 }
@@ -2717,7 +2721,7 @@ function renderNetconfBody(store: Store, pane: PaneState, tab: NetconfTabState):
     return el("div", { class: "table-scroll" }, [el("div", { class: "table-empty" }, [tab.fetchError])]);
   }
   if (tab.result) {
-    const rows = tab.result.flatMap((n) => renderNetconfNode(store, pane, tab, n, "", 0));
+    const rows = tab.result.flatMap((n, index) => renderNetconfNode(store, pane, tab, n, "", 0, index));
     return el("div", { class: "table-scroll" }, [el("div", { class: "gnmi-tree" }, rows)]);
   }
   if (tab.capabilities) {

@@ -16,7 +16,8 @@
 //! plumbing from this app. A target that doesn't advertise the `:xpath` capability can still be
 //! browsed at the root (path `"/"` or empty, which omits the filter and fetches everything).
 
-use quick_xml::events::{BytesStart, Event};
+use quick_xml::escape::resolve_xml_entity;
+use quick_xml::events::{BytesRef, BytesStart, Event};
 use quick_xml::Reader;
 use russh::client::{self, Msg};
 use russh::keys::PublicKeyOrCertificate;
@@ -259,29 +260,51 @@ fn local_name(e: &BytesStart) -> String {
     e.name().local_name().into_inner().to_string()
 }
 
+/// Resolves an `Event::GeneralRef` (`&name;` or `&#<number>;`) to the text it stands for, falling
+/// back to the reference written out literally (e.g. `&custom;`) for anything that isn't a
+/// character reference or one of the five predefined XML entities - this app has no DTD to
+/// resolve custom entities against.
+fn resolve_general_ref(r: &BytesRef) -> Result<String, String> {
+    if let Some(c) = r.resolve_char_ref().map_err(|e| format!("invalid character reference: {e}"))? {
+        return Ok(c.to_string());
+    }
+    if let Some(s) = resolve_xml_entity(r) {
+        return Ok(s.to_string());
+    }
+    Ok(format!("&{};", &**r))
+}
+
 fn parse_hello(xml: &str) -> Result<(Vec<String>, String), String> {
     let mut reader = Reader::from_str(xml);
-    reader.config_mut().trim_text(true);
+    // Not `trim_text(true)`: that trims each individual `Event::Text` fragment, which would eat
+    // whitespace bordering an entity/char reference (its own separate `Event::GeneralRef`, split
+    // out of the surrounding text). Trimming only the fully-accumulated `text` per element (below)
+    // gets the same "ignore incidental whitespace" behavior without that side effect.
     let mut capabilities = Vec::new();
     let mut session_id = String::new();
     let mut stack: Vec<String> = Vec::new();
+    let mut text = String::new();
     loop {
         match reader.read_event().map_err(|e| format!("failed to parse NETCONF hello: {e}"))? {
-            Event::Start(e) => stack.push(local_name(&e)),
+            Event::Start(e) => {
+                stack.push(local_name(&e));
+                text.clear();
+            }
             Event::End(_) => {
+                let trimmed = text.trim();
+                if !trimmed.is_empty() {
+                    match stack.last().map(String::as_str) {
+                        Some("capability") => capabilities.push(trimmed.to_string()),
+                        Some("session-id") => session_id = trimmed.to_string(),
+                        _ => {}
+                    }
+                }
+                text.clear();
                 stack.pop();
             }
-            Event::Text(t) => {
-                let text = t.into_inner().trim().to_string();
-                if text.is_empty() {
-                    continue;
-                }
-                match stack.last().map(String::as_str) {
-                    Some("capability") => capabilities.push(text),
-                    Some("session-id") => session_id = text,
-                    _ => {}
-                }
-            }
+            Event::Text(t) => text.push_str(&t.into_inner()),
+            Event::GeneralRef(r) => text.push_str(&resolve_general_ref(&r)?),
+            Event::CData(c) => text.push_str(&c.into_inner()),
             Event::Eof => break,
             _ => {}
         }
@@ -337,7 +360,7 @@ fn xml_escape_attr(s: &str) -> String {
 /// datastore (no filter); anything else needs the target's `:xpath` capability, since that's the
 /// only NETCONF filter type this app can build directly from a YANG-tree path without a
 /// module-by-module subtree walk (see this module's doc comment).
-fn get_rpc_xml(path: &str, xpath_supported: bool, module_namespaces: &HashMap<String, String>) -> Result<String, String> {
+pub(crate) fn get_rpc_xml(path: &str, xpath_supported: bool, module_namespaces: &HashMap<String, String>) -> Result<String, String> {
     let trimmed = path.trim();
     if trimmed.is_empty() || trimmed == "/" {
         return Ok(r#"<rpc message-id="1" xmlns="urn:ietf:params:xml:ns:netconf:base:1.0"><get/></rpc>"#.to_string());
@@ -371,7 +394,9 @@ fn parse_get_reply(xml: &str) -> Result<Vec<NetconfNode>, String> {
     }
 
     let mut reader = Reader::from_str(xml);
-    reader.config_mut().trim_text(true);
+    // See `parse_hello`'s comment on why this doesn't use `trim_text(true)`: `frame.text` is
+    // trimmed as a whole once fully accumulated (below), instead of trimming each `Event::Text`
+    // fragment individually and eating whitespace next to an `Event::GeneralRef`.
     let mut stack: Vec<Frame> = vec![Frame { name: String::new(), children: Vec::new(), text: String::new() }];
     loop {
         match reader.read_event().map_err(|e| format!("failed to parse NETCONF response: {e}"))? {
@@ -382,6 +407,13 @@ fn parse_get_reply(xml: &str) -> Result<Vec<NetconfNode>, String> {
             }
             Event::Text(t) => {
                 stack.last_mut().ok_or("unbalanced NETCONF response XML")?.text.push_str(&t.into_inner());
+            }
+            Event::GeneralRef(r) => {
+                let resolved = resolve_general_ref(&r)?;
+                stack.last_mut().ok_or("unbalanced NETCONF response XML")?.text.push_str(&resolved);
+            }
+            Event::CData(c) => {
+                stack.last_mut().ok_or("unbalanced NETCONF response XML")?.text.push_str(&c.into_inner());
             }
             Event::End(_) => {
                 let frame = stack.pop().ok_or("unbalanced NETCONF response XML")?;
@@ -558,5 +590,40 @@ mod tests {
 </rpc-reply>"#;
         let err = parse_get_reply(xml).unwrap_err();
         assert_eq!(err, "no such element");
+    }
+
+    #[test]
+    fn get_reply_values_preserve_entity_and_char_references() {
+        let xml = r#"<rpc-reply xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" message-id="1">
+  <data>
+    <description>Port 1 &amp; 2 &lt;uplink&gt; &#65;&#x42;</description>
+  </data>
+</rpc-reply>"#;
+        let roots = parse_get_reply(xml).unwrap();
+        assert_eq!(roots[0].value.as_deref(), Some("Port 1 & 2 <uplink> AB"));
+    }
+
+    #[test]
+    fn get_reply_values_preserve_cdata_content() {
+        let xml = r#"<rpc-reply xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" message-id="1">
+  <data>
+    <config><![CDATA[<not-an-element>&stays-literal]]></config>
+  </data>
+</rpc-reply>"#;
+        let roots = parse_get_reply(xml).unwrap();
+        assert_eq!(roots[0].value.as_deref(), Some("<not-an-element>&stays-literal"));
+    }
+
+    #[test]
+    fn hello_capabilities_preserve_entity_references() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<hello xmlns="urn:ietf:params:xml:ns:netconf:base:1.0">
+  <capabilities>
+    <capability>urn:example:a&amp;b</capability>
+  </capabilities>
+  <session-id>1</session-id>
+</hello>"#;
+        let (caps, _) = parse_hello(xml).unwrap();
+        assert_eq!(caps, vec!["urn:example:a&b".to_string()]);
     }
 }

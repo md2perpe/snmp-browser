@@ -176,17 +176,21 @@ button {
 /* Labels a group of sidebar sections (SNMP's MIB dirs+tree, gNMI's YANG dirs+tree) and, clicked,
    collapses/expands it - see `sidebarSectionHead()`. */
 .sidebar-section-head {
+  width: 100%;
   flex: none;
   display: flex;
   align-items: center;
   gap: 6px;
   padding: 8px 14px 8px;
+  font: inherit;
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.06em;
   color: var(--text-muted);
   text-transform: uppercase;
+  text-align: left;
   background: var(--bg-deep);
+  border: none;
   border-bottom: 1px solid var(--border-soft);
   border-top: 1px solid var(--border-soft);
   cursor: pointer;

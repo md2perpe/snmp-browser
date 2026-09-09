@@ -489,22 +489,28 @@ export class Store {
     this.notify();
   }
 
-  updateActiveGnmiTabInPane(paneId: string, patch: Patch<GnmiTabState>) {
+  /** Returns whether a matching tab was found and patched (and, with it, a `notify()` fired) -
+   * callers that need a `notify()` regardless, such as a sidebar selection that may target a
+   * differently-kinded active tab, check this instead of always notifying twice. */
+  updateActiveGnmiTabInPane(paneId: string, patch: Patch<GnmiTabState>): boolean {
     const pane = this.getPane(paneId);
-    if (!pane) return;
+    if (!pane) return false;
     const tab = this.getPaneActiveTab(pane);
-    if (!tab || tab.kind !== "gnmi") return;
+    if (!tab || tab.kind !== "gnmi") return false;
     this.applyPatch(tab, patch);
     this.notify();
+    return true;
   }
 
-  updateActiveNetconfTabInPane(paneId: string, patch: Patch<NetconfTabState>) {
+  /** See `updateActiveGnmiTabInPane`'s doc comment. */
+  updateActiveNetconfTabInPane(paneId: string, patch: Patch<NetconfTabState>): boolean {
     const pane = this.getPane(paneId);
-    if (!pane) return;
+    if (!pane) return false;
     const tab = this.getPaneActiveTab(pane);
-    if (!tab || tab.kind !== "netconf") return;
+    if (!tab || tab.kind !== "netconf") return false;
     this.applyPatch(tab, patch);
     this.notify();
+    return true;
   }
 
   // ---------- pane / tab management ----------
@@ -942,11 +948,8 @@ export class Store {
    * usable path, e.g. an unresolved `uses` placeholder). */
   selectYangNode(node: YangNode) {
     this.state.selectedYangNodeId = node.id;
-    if (node.path) {
-      this.updateActiveGnmiTabInPane(this.state.activePaneId, { path: node.path });
-    } else {
-      this.notify();
-    }
+    const updatedTab = node.path && this.updateActiveGnmiTabInPane(this.state.activePaneId, { path: node.path });
+    if (!updatedTab) this.notify();
   }
 
   /** Double-click: opens a new gNMI tab in the active pane with the node's path pre-filled - the
@@ -1097,11 +1100,8 @@ export class Store {
    * stage the node's path there too. The NETCONF counterpart to `selectYangNode`. */
   selectNetconfYangNode(node: YangNode) {
     this.state.selectedNetconfYangNodeId = node.id;
-    if (node.path) {
-      this.updateActiveNetconfTabInPane(this.state.activePaneId, { path: node.path });
-    } else {
-      this.notify();
-    }
+    const updatedTab = node.path && this.updateActiveNetconfTabInPane(this.state.activePaneId, { path: node.path });
+    if (!updatedTab) this.notify();
   }
 
   /** Double-click: opens a new NETCONF tab in the active pane with the node's path pre-filled -
