@@ -178,6 +178,11 @@ button {
     transform: rotate(360deg);
   }
 }
+@media (prefers-reduced-motion: reduce) {
+  .update-downloading-btn svg {
+    animation: none;
+  }
+}
 
 .update-error-btn {
   color: var(--red);

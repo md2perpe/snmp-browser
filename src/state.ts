@@ -236,11 +236,18 @@ export class Store {
    * status not yet clicked keeps re-resolving to the same update, which is
    * harmless, so it isn't skipped.
    */
-  private async runUpdateCheck() {
+  private isUpdateInProgress(): boolean {
     const phase = this.state.updateStatus?.phase;
-    if (phase === "downloading" || phase === "ready") return;
+    return phase === "downloading" || phase === "ready";
+  }
+
+  private async runUpdateCheck() {
+    if (this.isUpdateInProgress()) return;
     const update = await checkForUpdate();
     if (!update) return;
+    // installUpdate() may have moved the phase to "downloading" while this check
+    // was in flight; don't clobber that with a stale "available".
+    if (this.isUpdateInProgress()) return;
     this.pendingUpdate = update;
     this.state.updateStatus = { phase: "available", version: update.version, body: update.body ?? null };
     this.notify();
@@ -283,11 +290,9 @@ export class Store {
     await relaunch();
   }
 
-  /** Clears a failed download/install attempt and immediately re-checks, so a manual retry click doesn't have to wait for the next hourly check. */
+  /** Re-checks immediately after a failed download/install attempt, so a manual retry click doesn't have to wait for the next hourly check. The error (and its retry control) stays on screen until the check actually finds an update - `checkForUpdate()` can't distinguish "already up to date" from "check failed", so clearing it eagerly would leave a failed retry looking like nothing's wrong. */
   retryUpdate() {
     if (this.state.updateStatus?.phase !== "error") return;
-    this.state.updateStatus = null;
-    this.notify();
     void this.runUpdateCheck();
   }
 
