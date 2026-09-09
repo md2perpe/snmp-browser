@@ -153,3 +153,17 @@ export function startDrag(e: MouseEvent, onDelta: (dx: number) => void) {
   window.addEventListener("mousemove", onMove);
   window.addEventListener("mouseup", onUp);
 }
+
+/** The vertical-drag counterpart to `startDrag`, for the sidebar's between-section resize handles. */
+export function startDragY(e: MouseEvent, onDelta: (dy: number) => void) {
+  e.preventDefault();
+  e.stopPropagation();
+  const startY = e.clientY;
+  const onMove = (ev: MouseEvent) => onDelta(ev.clientY - startY);
+  const onUp = () => {
+    window.removeEventListener("mousemove", onMove);
+    window.removeEventListener("mouseup", onUp);
+  };
+  window.addEventListener("mousemove", onMove);
+  window.addEventListener("mouseup", onUp);
+}

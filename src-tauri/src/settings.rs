@@ -37,6 +37,19 @@ pub struct YangProfile {
     pub dirs: Vec<String>,
 }
 
+/// The NETCONF-side counterpart to `YangProfile`, kept as its own separate list rather than
+/// shared with gNMI's: a target's NETCONF YANG modules commonly come from a different vendor
+/// toolchain/release than what's loaded for gNMI, so the two need independently configurable
+/// directories even though a lot of real-world content overlaps. Same shape as `YangProfile`
+/// for the same "independent, not folded together" reason `YangProfile` itself documents.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct NetconfYangProfile {
+    pub id: String,
+    pub name: String,
+    pub dirs: Vec<String>,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
@@ -46,6 +59,10 @@ pub struct Settings {
     pub yang_profiles: Vec<YangProfile>,
     #[serde(default = "default_yang_profile_id")]
     pub active_yang_profile_id: String,
+    #[serde(default = "default_netconf_yang_profiles")]
+    pub netconf_yang_profiles: Vec<NetconfYangProfile>,
+    #[serde(default = "default_yang_profile_id")]
+    pub active_netconf_yang_profile_id: String,
     pub host_profiles: Vec<HostProfile>,
 }
 
@@ -54,6 +71,11 @@ pub struct Settings {
 /// leave YANG profile state missing or inconsistent with `active_yang_profile_id`.
 fn default_yang_profiles() -> Vec<YangProfile> {
     vec![YangProfile { id: "default".to_string(), name: "Default".into(), dirs: Vec::new() }]
+}
+
+/// Existing settings.json files predate `netconf_yang_profiles` - mirrors `default_yang_profiles`.
+fn default_netconf_yang_profiles() -> Vec<NetconfYangProfile> {
+    vec![NetconfYangProfile { id: "default".to_string(), name: "Default".into(), dirs: Vec::new() }]
 }
 
 fn default_yang_profile_id() -> String {
@@ -82,6 +104,8 @@ impl Default for Settings {
             active_mib_profile_id: id,
             yang_profiles: default_yang_profiles(),
             active_yang_profile_id: default_yang_profile_id(),
+            netconf_yang_profiles: default_netconf_yang_profiles(),
+            active_netconf_yang_profile_id: default_yang_profile_id(),
             host_profiles: Vec::new(),
         }
     }
@@ -128,6 +152,38 @@ impl Settings {
         }
     }
 
+    pub fn active_netconf_yang_profile(&self) -> Option<&NetconfYangProfile> {
+        self.netconf_yang_profiles.iter().find(|p| p.id == self.active_netconf_yang_profile_id)
+    }
+
+    pub fn active_netconf_yang_profile_mut(&mut self) -> Option<&mut NetconfYangProfile> {
+        self.netconf_yang_profiles.iter_mut().find(|p| p.id == self.active_netconf_yang_profile_id)
+    }
+
+    pub fn add_netconf_yang_profile(&mut self, name: String) -> &NetconfYangProfile {
+        let id = new_profile_id();
+        self.netconf_yang_profiles.push(NetconfYangProfile { id: id.clone(), name, dirs: Vec::new() });
+        self.active_netconf_yang_profile_id = id;
+        self.netconf_yang_profiles.last().unwrap()
+    }
+
+    /// No-ops if `id` is the only remaining profile - there must always be at least one.
+    pub fn remove_netconf_yang_profile(&mut self, id: &str) {
+        if self.netconf_yang_profiles.len() <= 1 {
+            return;
+        }
+        self.netconf_yang_profiles.retain(|p| p.id != id);
+        if self.active_netconf_yang_profile_id == id {
+            self.active_netconf_yang_profile_id = self.netconf_yang_profiles[0].id.clone();
+        }
+    }
+
+    pub fn rename_netconf_yang_profile(&mut self, id: &str, name: String) {
+        if let Some(p) = self.netconf_yang_profiles.iter_mut().find(|p| p.id == id) {
+            p.name = name;
+        }
+    }
+
     pub fn add_mib_profile(&mut self, name: String) -> &MibProfile {
         let id = new_profile_id();
         self.mib_profiles.push(MibProfile { id: id.clone(), name, dirs: Vec::new() });
@@ -168,6 +224,8 @@ pub fn load(path: &PathBuf) -> Settings {
             active_mib_profile_id: id,
             yang_profiles: default_yang_profiles(),
             active_yang_profile_id: default_yang_profile_id(),
+            netconf_yang_profiles: default_netconf_yang_profiles(),
+            active_netconf_yang_profile_id: default_yang_profile_id(),
             host_profiles: old.host_profiles,
         };
     }
@@ -203,6 +261,33 @@ mod tests {
         assert_eq!(settings.mib_profiles[0].dirs, vec!["/mibs/one", "/mibs/two"]);
         assert_eq!(settings.active_mib_profile_id, settings.mib_profiles[0].id);
         assert_eq!(settings.host_profiles.len(), 1);
+    }
+
+    #[test]
+    fn loading_a_settings_file_that_predates_netconf_yang_profiles_defaults_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        std::fs::write(
+            &path,
+            r#"{
+                "mibProfiles": [{"id": "default", "name": "Default", "dirs": []}],
+                "activeMibProfileId": "default",
+                "yangProfiles": [{"id": "default", "name": "Default", "dirs": ["/yang/gnmi"]}],
+                "activeYangProfileId": "default",
+                "hostProfiles": []
+            }"#,
+        )
+        .unwrap();
+
+        let settings = load(&path);
+
+        // The gNMI-side YANG profile's directories survive untouched...
+        assert_eq!(settings.yang_profiles[0].dirs, vec!["/yang/gnmi"]);
+        // ...while the NETCONF-side one - absent from this pre-NETCONF settings file - comes back
+        // as its own separate, empty default rather than inheriting gNMI's directories.
+        assert_eq!(settings.netconf_yang_profiles.len(), 1);
+        assert!(settings.netconf_yang_profiles[0].dirs.is_empty());
+        assert_eq!(settings.active_netconf_yang_profile_id, settings.netconf_yang_profiles[0].id);
     }
 
     #[test]

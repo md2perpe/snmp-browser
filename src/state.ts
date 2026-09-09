@@ -17,6 +17,12 @@ import type {
   MibNode,
   MibProfile,
   MibProfilesResponse,
+  NetconfCapabilities,
+  NetconfConnectionParams,
+  NetconfNode,
+  NetconfTabState,
+  NetconfYangProfile,
+  NetconfYangProfilesResponse,
   PaneState,
   ParseResult,
   Row,
@@ -46,6 +52,9 @@ const DEFAULT_TRAP_PORT = "162";
 const DEFAULT_GNMI_PORT = "57400";
 const DEFAULT_GNMI_USERNAME = "admin";
 const DEFAULT_GNMI_PASSWORD = "admin";
+const DEFAULT_NETCONF_PORT = "2022";
+const DEFAULT_NETCONF_USERNAME = "admin";
+const DEFAULT_NETCONF_PASSWORD = "admin";
 const TRAP_POLL_INTERVAL_MS = 1000;
 /** How often to re-check for a new release - the app is commonly left open for a long time, so a startup-only check would miss releases that come out mid-session. */
 const UPDATE_CHECK_INTERVAL_MS = 60 * 60 * 1000;
@@ -55,6 +64,10 @@ const THEME_STORAGE_KEY = "snmpBrowserTheme";
 const LAST_ADDR_STORAGE_KEY = "snmpBrowserLastAddr";
 const DEFAULT_BENCHMARK_ITERATIONS = 10;
 const MAX_BENCHMARK_ITERATIONS = 1000;
+/** Starting height (px) of each resizable sidebar section's tree area - overridden by dragging its splitter. */
+const DEFAULT_SIDEBAR_SECTION_HEIGHT = 220;
+/** Floor a sidebar section's tree area can be dragged down to - short of 0, so its header and a sliver of content stay reachable. */
+const MIN_SIDEBAR_SECTION_HEIGHT = 60;
 
 /** The host address most recently used for a connection attempt, from either an SNMP query tab
  * or a gNMI tab - shared across both, so a new tab of either kind starts from wherever the user
@@ -146,6 +159,11 @@ export class Store {
   /** The gNMI tab's schema tree, parsed from the active YANG profile's directories. */
   yangTree: YangNode[] = [];
   yangDirFiles: DirFiles[] = [];
+  /** The NETCONF-side counterpart to `yangTree`/`yangDirFiles`, parsed from its own separate
+   * active NETCONF YANG profile's directories - see `NetconfYangProfile`'s doc comment for why
+   * this isn't just `yangTree` again. */
+  netconfYangTree: YangNode[] = [];
+  netconfYangDirFiles: DirFiles[] = [];
   /** This machine's non-loopback IPv4 addresses, for the trap listener's "point your device here" hint. Empty until a trap tab has been opened at least once. */
   localIps: string[] = [];
 
@@ -196,6 +214,20 @@ export class Store {
       yangParseErrors: [],
       yangParseErrorsOpen: false,
       selectedYangNodeId: "",
+      netconfYangProfiles: [],
+      activeNetconfYangProfileId: "",
+      netconfYangDirDraft: null,
+      netconfYangProfileDraft: null,
+      renamingNetconfYangProfile: false,
+      netconfYangParseErrors: [],
+      netconfYangParseErrorsOpen: false,
+      selectedNetconfYangNodeId: "",
+      mibSectionCollapsed: false,
+      mibTreeHeight: DEFAULT_SIDEBAR_SECTION_HEIGHT,
+      yangSectionCollapsed: false,
+      yangTreeHeight: DEFAULT_SIDEBAR_SECTION_HEIGHT,
+      netconfYangSectionCollapsed: false,
+      netconfYangTreeHeight: DEFAULT_SIDEBAR_SECTION_HEIGHT,
       leftWidth: 330,
       leftCollapsed: false,
       panes: [{ id: "p1", width: null, activeTabId: null, tabs: [] }],
@@ -211,16 +243,18 @@ export class Store {
   }
 
   async init() {
-    const [profiles, hostProfiles, yangProfiles] = await Promise.all([
+    const [profiles, hostProfiles, yangProfiles, netconfYangProfiles] = await Promise.all([
       invoke<MibProfilesResponse>("list_mib_profiles"),
       invoke<HostProfile[]>("list_host_profiles"),
       invoke<YangProfilesResponse>("list_yang_profiles"),
+      invoke<NetconfYangProfilesResponse>("list_netconf_yang_profiles"),
     ]);
     this.applyMibProfilesResponse(profiles);
     this.hostProfiles = hostProfiles;
     this.applyYangProfilesResponse(yangProfiles);
+    this.applyNetconfYangProfilesResponse(netconfYangProfiles);
     this.notify();
-    await Promise.all([this.loadMibTree(), this.loadYangTree()]);
+    await Promise.all([this.loadMibTree(), this.loadYangTree(), this.loadNetconfYangTree()]);
     if (isTauri) {
       void this.runUpdateCheck();
       setInterval(() => void this.runUpdateCheck(), UPDATE_CHECK_INTERVAL_MS);
@@ -312,6 +346,15 @@ export class Store {
 
   activeYangProfile(): YangProfile | undefined {
     return this.state.yangProfiles.find((p) => p.id === this.state.activeYangProfileId);
+  }
+
+  private applyNetconfYangProfilesResponse(resp: NetconfYangProfilesResponse) {
+    this.state.netconfYangProfiles = resp.profiles;
+    this.state.activeNetconfYangProfileId = resp.activeProfileId;
+  }
+
+  activeNetconfYangProfile(): NetconfYangProfile | undefined {
+    return this.state.netconfYangProfiles.find((p) => p.id === this.state.activeNetconfYangProfileId);
   }
 
   onChange(fn: () => void) {
@@ -443,6 +486,29 @@ export class Store {
     };
   }
 
+  /** A NETCONF tab starts with blank connection fields, same shape as `makeGnmiTab` - the address
+   * defaults to whatever was last used (SNMP, gNMI, or NETCONF), the rest to this deployment's
+   * usual lab-device shape. The path defaults to "/" so Get is immediately usable to fetch the
+   * whole datastore, same as a fresh gNMI tab. */
+  makeNetconfTab(id: string, opts: Partial<NetconfTabState> = {}): NetconfTabState {
+    return {
+      kind: "netconf",
+      id,
+      hostAddr: this.lastUsedAddr,
+      hostPort: DEFAULT_NETCONF_PORT,
+      username: DEFAULT_NETCONF_USERNAME,
+      password: DEFAULT_NETCONF_PASSWORD,
+      path: "/",
+      capabilities: null,
+      result: null,
+      expandedIds: {},
+      loading: false,
+      fetchError: null,
+      lastFetch: "",
+      ...opts,
+    };
+  }
+
   // ---------- lookups ----------
 
   getPane(id: string): PaneState | undefined {
@@ -490,13 +556,28 @@ export class Store {
     this.notify();
   }
 
-  updateActiveGnmiTabInPane(paneId: string, patch: Patch<GnmiTabState>) {
+  /** Returns whether a matching tab was found and patched (and, with it, a `notify()` fired) -
+   * callers that need a `notify()` regardless, such as a sidebar selection that may target a
+   * differently-kinded active tab, check this instead of always notifying twice. */
+  updateActiveGnmiTabInPane(paneId: string, patch: Patch<GnmiTabState>): boolean {
     const pane = this.getPane(paneId);
-    if (!pane) return;
+    if (!pane) return false;
     const tab = this.getPaneActiveTab(pane);
-    if (!tab || tab.kind !== "gnmi") return;
+    if (!tab || tab.kind !== "gnmi") return false;
     this.applyPatch(tab, patch);
     this.notify();
+    return true;
+  }
+
+  /** See `updateActiveGnmiTabInPane`'s doc comment. */
+  updateActiveNetconfTabInPane(paneId: string, patch: Patch<NetconfTabState>): boolean {
+    const pane = this.getPane(paneId);
+    if (!pane) return false;
+    const tab = this.getPaneActiveTab(pane);
+    if (!tab || tab.kind !== "netconf") return false;
+    this.applyPatch(tab, patch);
+    this.notify();
+    return true;
   }
 
   // ---------- pane / tab management ----------
@@ -587,6 +668,17 @@ export class Store {
     this.notify();
   }
 
+  /** Opens a new, blank NETCONF browser tab in the given pane - the NETCONF counterpart to `openGnmiTab`. */
+  openNetconfTab(paneId: string) {
+    const pane = this.getPane(paneId);
+    if (!pane) return;
+    const tab = this.makeNetconfTab("tab" + Date.now());
+    pane.tabs.push(tab);
+    pane.activeTabId = tab.id;
+    this.state.activePaneId = paneId;
+    this.notify();
+  }
+
   closeTabInPane(paneId: string, tabId: string) {
     const pane = this.getPane(paneId);
     if (!pane) return;
@@ -598,8 +690,9 @@ export class Store {
     }
     // The walk in flight can't be aborted, but this stops the run from starting another.
     if (tab?.kind === "benchmark" && tab.running) tab.cancelling = true;
-    // gNMI Phase 1's Capabilities/Get calls are one-shot, so a "gnmi" tab has no backend
-    // session to tear down here (unlike trap/benchmark above) - that arrives with Subscribe.
+    // gNMI/NETCONF Phase 1's Capabilities/Get calls are one-shot, so neither tab kind has a
+    // backend session to tear down here (unlike trap/benchmark above) - that arrives with
+    // gNMI Subscribe or a NETCONF persistent-connection mode, neither implemented yet.
     pane.tabs = pane.tabs.filter((t) => t.id !== tabId);
     if (pane.activeTabId === tabId) {
       pane.activeTabId = pane.tabs.length ? pane.tabs[pane.tabs.length - 1].id : null;
@@ -618,8 +711,8 @@ export class Store {
     if (newTab?.kind === "trap") newTab = { ...newTab, running: false, boundAddr: "", startError: null, events: [], lastSeq: 0, expandedSeq: null };
     // Likewise, a duplicated benchmark tab doesn't inherit the run loop backing it.
     if (newTab?.kind === "benchmark") newTab = { ...newTab, running: false, cancelling: false };
-    // A duplicated gnmi tab needs no such reset in Phase 1 - its Capabilities/Get calls are
-    // one-shot, not a backing session like trap/benchmark above.
+    // A duplicated gnmi/netconf tab needs no such reset in Phase 1 - its Capabilities/Get calls
+    // are one-shot, not a backing session like trap/benchmark above.
     pane.width = 620;
     const newPane: PaneState = { id: "pane" + Date.now(), width: null, tabs: newTab ? [newTab] : [], activeTabId: newTab?.id ?? null };
     this.state.panes.push(newPane);
@@ -638,7 +731,7 @@ export class Store {
         if (t.running) void invoke("stop_trap_listener", { id: t.id });
       }
       if (t.kind === "benchmark" && t.running) t.cancelling = true;
-      // gNMI Phase 1 has no backend session to stop here either - see closeTabInPane.
+      // gNMI/NETCONF Phase 1 have no backend session to stop here either - see closeTabInPane.
     });
     this.state.panes = this.state.panes.filter((p) => p.id !== paneId);
     if (this.state.panes.length === 1) this.state.panes[0].width = null;
@@ -669,6 +762,36 @@ export class Store {
 
   setLeftWidth(width: number) {
     this.state.leftWidth = Math.min(520, Math.max(220, width));
+    this.notify();
+  }
+
+  toggleMibSectionCollapsed() {
+    this.state.mibSectionCollapsed = !this.state.mibSectionCollapsed;
+    this.notify();
+  }
+
+  setMibTreeHeight(height: number) {
+    this.state.mibTreeHeight = Math.max(MIN_SIDEBAR_SECTION_HEIGHT, height);
+    this.notify();
+  }
+
+  toggleYangSectionCollapsed() {
+    this.state.yangSectionCollapsed = !this.state.yangSectionCollapsed;
+    this.notify();
+  }
+
+  setYangTreeHeight(height: number) {
+    this.state.yangTreeHeight = Math.max(MIN_SIDEBAR_SECTION_HEIGHT, height);
+    this.notify();
+  }
+
+  toggleNetconfYangSectionCollapsed() {
+    this.state.netconfYangSectionCollapsed = !this.state.netconfYangSectionCollapsed;
+    this.notify();
+  }
+
+  setNetconfYangTreeHeight(height: number) {
+    this.state.netconfYangTreeHeight = Math.max(MIN_SIDEBAR_SECTION_HEIGHT, height);
     this.notify();
   }
 
@@ -721,6 +844,12 @@ export class Store {
   /** The YANG-tree counterpart to `openTreeContextMenu`. */
   openYangTreeContextMenu(x: number, y: number, nodeId: string) {
     this.state.treeContextMenu = { x, y, nodeId, kind: "yang" };
+    this.notify();
+  }
+
+  /** The NETCONF YANG-tree counterpart to `openYangTreeContextMenu`. */
+  openNetconfYangTreeContextMenu(x: number, y: number, nodeId: string) {
+    this.state.treeContextMenu = { x, y, nodeId, kind: "netconf-yang" };
     this.notify();
   }
 
@@ -886,11 +1015,8 @@ export class Store {
    * usable path, e.g. an unresolved `uses` placeholder). */
   selectYangNode(node: YangNode) {
     this.state.selectedYangNodeId = node.id;
-    if (node.path) {
-      this.updateActiveGnmiTabInPane(this.state.activePaneId, { path: node.path });
-    } else {
-      this.notify();
-    }
+    const updatedTab = node.path && this.updateActiveGnmiTabInPane(this.state.activePaneId, { path: node.path });
+    if (!updatedTab) this.notify();
   }
 
   /** Double-click: opens a new gNMI tab in the active pane with the node's path pre-filled - the
@@ -1032,6 +1158,157 @@ export class Store {
     this.notify();
   }
 
+  // ---------- YANG directories / profiles (NETCONF schema tree) ----------
+  // The NETCONF-side counterpart to the gNMI section above, over its own separate profile list
+  // (`netconfYangProfiles`) and backend commands (`*_netconf_yang_*`) - see `NetconfYangProfile`'s
+  // doc comment for why NETCONF doesn't just reuse gNMI's YANG directories.
+
+  /** Single-click: highlight the row, and - if the active pane's active tab is a NETCONF tab -
+   * stage the node's path there too. The NETCONF counterpart to `selectYangNode`. */
+  selectNetconfYangNode(node: YangNode) {
+    this.state.selectedNetconfYangNodeId = node.id;
+    const updatedTab = node.path && this.updateActiveNetconfTabInPane(this.state.activePaneId, { path: node.path });
+    if (!updatedTab) this.notify();
+  }
+
+  /** Double-click: opens a new NETCONF tab in the active pane with the node's path pre-filled -
+   * the NETCONF counterpart to `openYangNodeInNewTab`. */
+  openNetconfYangNodeInNewTab(node: YangNode) {
+    if (!node.path) return;
+    this.state.selectedNetconfYangNodeId = node.id;
+    const pane = this.getPane(this.state.activePaneId);
+    if (!pane) return;
+    const tab = this.makeNetconfTab("tab" + Date.now(), { path: node.path });
+    pane.tabs.push(tab);
+    pane.activeTabId = tab.id;
+    this.closeTreeContextMenu();
+    this.notify();
+  }
+
+  toggleNetconfYangParseErrors() {
+    this.state.netconfYangParseErrorsOpen = !this.state.netconfYangParseErrorsOpen;
+    this.notify();
+  }
+
+  async loadNetconfYangTree() {
+    const result = await invoke<YangParseResult>("get_netconf_yang_tree");
+    this.netconfYangTree = result.tree;
+    this.netconfYangDirFiles = result.dirFiles;
+    this.state.netconfYangParseErrors = result.errors;
+    if (result.errors.length === 0) this.state.netconfYangParseErrorsOpen = false;
+    this.notify();
+  }
+
+  async addNetconfYangDir() {
+    if (!isTauri) {
+      this.state.netconfYangDirDraft = "";
+      this.notify();
+      return;
+    }
+    const selected = await pickDirectory();
+    if (!selected) return;
+    await this.commitNetconfYangDir(selected);
+  }
+
+  updateNetconfYangDirDraft(text: string) {
+    this.state.netconfYangDirDraft = text;
+    this.notify();
+  }
+
+  cancelNetconfYangDirDraft() {
+    this.state.netconfYangDirDraft = null;
+    this.notify();
+  }
+
+  async submitNetconfYangDirDraft() {
+    const path = this.state.netconfYangDirDraft?.trim();
+    this.state.netconfYangDirDraft = null;
+    if (!path) {
+      this.notify();
+      return;
+    }
+    await this.commitNetconfYangDir(path);
+  }
+
+  private async commitNetconfYangDir(path: string) {
+    this.applyNetconfYangProfilesResponse(await invoke<NetconfYangProfilesResponse>("add_netconf_yang_dir", { path }));
+    this.notify();
+    await this.loadNetconfYangTree();
+  }
+
+  async removeNetconfYangDir(path: string) {
+    this.applyNetconfYangProfilesResponse(await invoke<NetconfYangProfilesResponse>("remove_netconf_yang_dir", { path }));
+    this.notify();
+    await this.loadNetconfYangTree();
+  }
+
+  async switchNetconfYangProfile(id: string) {
+    if (id === this.state.activeNetconfYangProfileId) return;
+    this.applyNetconfYangProfilesResponse(await invoke<NetconfYangProfilesResponse>("set_active_netconf_yang_profile", { id }));
+    this.notify();
+    await this.loadNetconfYangTree();
+  }
+
+  startNetconfYangProfileDraft() {
+    this.state.netconfYangProfileDraft = "";
+    this.notify();
+  }
+
+  updateNetconfYangProfileDraft(text: string) {
+    this.state.netconfYangProfileDraft = text;
+    this.notify();
+  }
+
+  cancelNetconfYangProfileDraft() {
+    this.state.netconfYangProfileDraft = null;
+    this.notify();
+  }
+
+  async submitNetconfYangProfileDraft() {
+    const name = this.state.netconfYangProfileDraft?.trim();
+    this.state.netconfYangProfileDraft = null;
+    if (!name) {
+      this.notify();
+      return;
+    }
+    this.applyNetconfYangProfilesResponse(await invoke<NetconfYangProfilesResponse>("add_netconf_yang_profile", { name }));
+    this.notify();
+    await this.loadNetconfYangTree();
+  }
+
+  async removeNetconfYangProfile(id: string) {
+    if (this.state.netconfYangProfiles.length <= 1) return;
+    const wasActive = id === this.state.activeNetconfYangProfileId;
+    this.applyNetconfYangProfilesResponse(await invoke<NetconfYangProfilesResponse>("remove_netconf_yang_profile", { id }));
+    if (wasActive) {
+      this.notify();
+      await this.loadNetconfYangTree();
+    } else {
+      this.notify();
+    }
+  }
+
+  startRenamingNetconfYangProfile() {
+    this.state.renamingNetconfYangProfile = true;
+    this.notify();
+  }
+
+  cancelRenamingNetconfYangProfile() {
+    this.state.renamingNetconfYangProfile = false;
+    this.notify();
+  }
+
+  async renameNetconfYangProfile(id: string, name: string) {
+    this.state.renamingNetconfYangProfile = false;
+    const trimmed = name.trim();
+    if (!trimmed) {
+      this.notify();
+      return;
+    }
+    this.applyNetconfYangProfilesResponse(await invoke<NetconfYangProfilesResponse>("rename_netconf_yang_profile", { id, name: trimmed }));
+    this.notify();
+  }
+
   /** The tree currently shown in the sidebar: the full group hierarchy, or the flat tables-only view. */
   activeTree(): MibNode[] {
     return this.state.tablesOnlyMode ? this.tablesTree : this.tree;
@@ -1065,6 +1342,16 @@ export class Store {
     for (const n of nodes) {
       if (n.id === id) return n;
       const f = this.findYangNode(n.children, id);
+      if (f) return f;
+    }
+    return null;
+  }
+
+  /** The NETCONF YANG-tree counterpart to `findYangNode`. */
+  findNetconfYangNode(nodes: YangNode[], id: string): YangNode | null {
+    for (const n of nodes) {
+      if (n.id === id) return n;
+      const f = this.findNetconfYangNode(n.children, id);
       if (f) return f;
     }
     return null;
@@ -1499,6 +1786,76 @@ export class Store {
     this.notify();
     try {
       const result = await invoke<{ roots: GnmiNode[] }>("gnmi_get", { connection: this.gnmiConnectionOf(tab), path: tab.path });
+      tab.result = result.roots;
+      tab.expandedIds = {};
+      tab.fetchError = null;
+    } catch (e) {
+      tab.fetchError = errorMessage(e);
+    }
+    tab.loading = false;
+    tab.lastFetch = new Date().toLocaleTimeString();
+    this.notify();
+  }
+
+  // ---------- NETCONF tab ----------
+
+  toggleNetconfNodeExpanded(paneId: string, nodeKey: string) {
+    this.updateActiveNetconfTabInPane(paneId, (t) => ({ expandedIds: { ...t.expandedIds, [nodeKey]: !t.expandedIds[nodeKey] } }));
+  }
+
+  /** A NETCONF tab's connection fields in the shape the backend's `netconf_capabilities`/`netconf_get` commands expect. */
+  private netconfConnectionOf(tab: NetconfTabState): NetconfConnectionParams {
+    return { hostAddr: tab.hostAddr, hostPort: tab.hostPort, username: tab.username, password: tab.password };
+  }
+
+  /** Whether a NETCONF tab's connection fields are filled in enough to attempt a call - unlike
+   * gNMI, username and password are both required, since Phase 1 only supports SSH password auth. */
+  hasCompleteNetconfConnection(tab: NetconfTabState): boolean {
+    return !!tab.hostAddr.trim() && !!tab.hostPort.trim() && !!tab.username.trim() && !!tab.password;
+  }
+
+  async runNetconfCapabilities(paneId: string) {
+    const pane = this.getPane(paneId);
+    const tab = pane && this.getPaneActiveTab(pane);
+    if (!tab || tab.kind !== "netconf") return;
+    if (!this.hasCompleteNetconfConnection(tab)) {
+      tab.fetchError = "Fill in the target address, port, username, and password first";
+      this.notify();
+      return;
+    }
+    this.noteUsedAddr(tab.hostAddr);
+    tab.loading = true;
+    this.notify();
+    try {
+      tab.capabilities = await invoke<NetconfCapabilities>("netconf_capabilities", { connection: this.netconfConnectionOf(tab) });
+      tab.fetchError = null;
+    } catch (e) {
+      tab.fetchError = errorMessage(e);
+    }
+    tab.loading = false;
+    tab.lastFetch = new Date().toLocaleTimeString();
+    this.notify();
+  }
+
+  async runNetconfGet(paneId: string) {
+    const pane = this.getPane(paneId);
+    const tab = pane && this.getPaneActiveTab(pane);
+    if (!tab || tab.kind !== "netconf") return;
+    if (!this.hasCompleteNetconfConnection(tab)) {
+      tab.fetchError = "Fill in the target address, port, username, and password first";
+      this.notify();
+      return;
+    }
+    if (!tab.path.trim()) {
+      tab.fetchError = "Enter a NETCONF path first";
+      this.notify();
+      return;
+    }
+    this.noteUsedAddr(tab.hostAddr);
+    tab.loading = true;
+    this.notify();
+    try {
+      const result = await invoke<{ roots: NetconfNode[] }>("netconf_get", { connection: this.netconfConnectionOf(tab), path: tab.path });
       tab.result = result.roots;
       tab.expandedIds = {};
       tab.fetchError = null;

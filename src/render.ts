@@ -1,4 +1,4 @@
-import { el, startDrag, svgIcon } from "./dom";
+import { el, startDrag, startDragY, svgIcon } from "./dom";
 import { exportTableCsv, exportTablePng } from "./export";
 import { DEFAULT_COL_WIDTH } from "./mockData";
 import { computeStats, type Store } from "./state";
@@ -8,6 +8,8 @@ import type {
   GnmiNode,
   GnmiTabState,
   MibNode,
+  NetconfNode,
+  NetconfTabState,
   NodeType,
   PaneState,
   Row,
@@ -51,6 +53,13 @@ function trapListenerIcon(): SVGSVGElement {
 function gnmiTabIcon(): SVGSVGElement {
   return svgIcon(
     '<circle cx="5" cy="6" r="2.5"/><circle cx="19" cy="6" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="M7 7l3 8"/><path d="M17 7l-3 8"/>',
+  );
+}
+
+/** Terminal icon (SSH transport), used for the "new NETCONF tab" action. */
+function netconfTabIcon(): SVGSVGElement {
+  return svgIcon(
+    '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l4 3-4 3"/><path d="M13 15h4"/>',
   );
 }
 
@@ -437,6 +446,68 @@ function renderSidebar(store: Store): HTMLElement {
           el("button", { class: "mib-dir-draft-cancel", title: "Cancel", onclick: () => store.cancelMibProfileDraft() }, ["×"]),
         ]);
 
+  // Which of the three collapsible sections is the last expanded one - it fills whatever space
+  // remains instead of using its own dragged height; see `sidebarTreeFlex()`.
+  const sectionsExpanded = [!store.state.mibSectionCollapsed, !store.state.yangSectionCollapsed, !store.state.netconfYangSectionCollapsed];
+  const lastExpanded = sectionsExpanded.lastIndexOf(true);
+
+  const mibExpanded = sectionsExpanded[0];
+  const mibStartHeight = store.state.mibTreeHeight;
+  const mibSectionBody: (HTMLElement | null)[] = !mibExpanded
+    ? []
+    : [
+        el("div", { class: "mib-dirs" }, [
+          profileRow,
+          renameRow,
+          profileDraftRow,
+          el("div", { class: "mib-dirs-head" }, [
+            el("div", { class: "mib-dirs-title" }, ["MIB Directories"]),
+            el(
+              "button",
+              {
+                class: "mib-dir-add",
+                title: "Add MIB directory",
+                onclick: () => {
+                  // addMibDir() runs synchronously up to its first `await` (only taken
+                  // on the native-picker path), so the draft input already exists
+                  // in the DOM by the time this call returns in browser mode.
+                  void store.addMibDir();
+                  document.querySelector<HTMLInputElement>(".snmp-dir-draft-input")?.focus();
+                },
+              },
+              ["+"],
+            ),
+          ]),
+          el("div", { class: "mib-dir-list" }, dirRows),
+          draftRow,
+        ]),
+        el("div", { class: "tree-mode-box" }, [
+          el(
+            "div",
+            { class: "tree-mode-toggle" },
+            [
+              { label: "Tree", value: false },
+              { label: "Tables", value: true },
+            ].map(({ label, value }) =>
+              el(
+                "button",
+                {
+                  class: "tree-mode-btn" + (store.state.tablesOnlyMode === value ? " active" : ""),
+                  onclick: () => store.setTablesOnlyMode(value),
+                },
+                [label],
+              ),
+            ),
+          ),
+        ]),
+        el(
+          "div",
+          { class: "tree", "data-preserve-scroll": "tree", style: { flex: sidebarTreeFlex(mibStartHeight, lastExpanded === 0) } },
+          visibleNodes.map(({ node, depth }) => renderTreeRow(store, node, depth, selectedNodeId)),
+        ),
+        lastExpanded === 0 ? null : renderSplitterH((e) => startDragY(e, (dy) => store.setMibTreeHeight(mibStartHeight + dy))),
+      ];
+
   return el("div", { class: "sidebar", style: { width: store.state.leftWidth + "px" } }, [
     el("div", { class: "sidebar-header" }, [
       el("button", { class: "icon-btn", title: "Hide sidebar", onclick: () => store.toggleLeft() }, [sidebarToggleIcon()]),
@@ -444,57 +515,10 @@ function renderSidebar(store: Store): HTMLElement {
       renderUpdateButton(store),
       el("button", { class: "icon-btn", title: "Theme", onclick: (e: MouseEvent) => openThemeMenu(store, e) }, [paletteIcon()]),
     ]),
-    el("div", { class: "sidebar-section-head" }, ["SNMP (MIB)"]),
-    el("div", { class: "mib-dirs" }, [
-      profileRow,
-      renameRow,
-      profileDraftRow,
-      el("div", { class: "mib-dirs-head" }, [
-        el("div", { class: "mib-dirs-title" }, ["MIB Directories"]),
-        el(
-          "button",
-          {
-            class: "mib-dir-add",
-            title: "Add MIB directory",
-            onclick: () => {
-              // addMibDir() runs synchronously up to its first `await` (only taken
-              // on the native-picker path), so the draft input already exists
-              // in the DOM by the time this call returns in browser mode.
-              void store.addMibDir();
-              document.querySelector<HTMLInputElement>(".snmp-dir-draft-input")?.focus();
-            },
-          },
-          ["+"],
-        ),
-      ]),
-      el("div", { class: "mib-dir-list" }, dirRows),
-      draftRow,
-    ]),
-    el("div", { class: "tree-mode-box" }, [
-      el(
-        "div",
-        { class: "tree-mode-toggle" },
-        [
-          { label: "Tree", value: false },
-          { label: "Tables", value: true },
-        ].map(({ label, value }) =>
-          el(
-            "button",
-            {
-              class: "tree-mode-btn" + (store.state.tablesOnlyMode === value ? " active" : ""),
-              onclick: () => store.setTablesOnlyMode(value),
-            },
-            [label],
-          ),
-        ),
-      ),
-    ]),
-    el(
-      "div",
-      { class: "tree", "data-preserve-scroll": "tree" },
-      visibleNodes.map(({ node, depth }) => renderTreeRow(store, node, depth, selectedNodeId)),
-    ),
-    ...renderYangSection(store),
+    sidebarSectionHead("SNMP (MIB)", !mibExpanded, () => store.toggleMibSectionCollapsed()),
+    ...mibSectionBody,
+    ...renderYangSection(store, lastExpanded === 1),
+    ...renderNetconfYangSection(store, lastExpanded === 2),
   ]);
 }
 
@@ -589,11 +613,48 @@ function yangTreeContextMenuItems(store: Store, nodeId: string): HTMLElement[] {
   return items;
 }
 
+/** The NETCONF YANG-tree counterpart to `yangTreeContextMenuItems`, over `store.netconfYangTree`
+ * and `store.openNetconfYangNodeInNewTab` instead of gNMI's. */
+function netconfYangTreeContextMenuItems(store: Store, nodeId: string): HTMLElement[] {
+  const node = store.findNetconfYangNode(store.netconfYangTree, nodeId);
+
+  const items: HTMLElement[] = [];
+  if (node) {
+    const copyText = node.path || node.label;
+    items.push(
+      el(
+        "button",
+        {
+          class: "context-menu-item",
+          onclick: () => {
+            void navigator.clipboard.writeText(copyText);
+            store.closeTreeContextMenu();
+          },
+        },
+        [`Copy ${node.path ? "path" : "name"} "${copyText}"`],
+      ),
+    );
+  }
+  if (node && node.path) {
+    items.push(
+      el("button", { class: "context-menu-item", onclick: () => store.openNetconfYangNodeInNewTab(node) }, [
+        `Open "${node.label}" in new tab`,
+      ]),
+    );
+  }
+  return items;
+}
+
 function renderTreeContextMenu(store: Store): HTMLElement | null {
   const menu = store.state.treeContextMenu;
   if (!menu) return null;
 
-  const items: HTMLElement[] = menu.kind === "yang" ? yangTreeContextMenuItems(store, menu.nodeId) : mibTreeContextMenuItems(store, menu.nodeId);
+  const items: HTMLElement[] =
+    menu.kind === "yang"
+      ? yangTreeContextMenuItems(store, menu.nodeId)
+      : menu.kind === "netconf-yang"
+        ? netconfYangTreeContextMenuItems(store, menu.nodeId)
+        : mibTreeContextMenuItems(store, menu.nodeId);
   if (items.length === 0) return null;
 
   return el(
@@ -667,6 +728,27 @@ function renderSplitter(onMouseDown: (e: MouseEvent) => void): HTMLElement {
   return el("div", { class: "splitter", onmousedown: onMouseDown }, [el("div", { class: "splitter-line" })]);
 }
 
+/** The vertical-drag counterpart to `renderSplitter`, between two resizable sidebar sections. */
+function renderSplitterH(onMouseDown: (e: MouseEvent) => void): HTMLElement {
+  return el("div", { class: "splitter-h", onmousedown: onMouseDown }, [el("div", { class: "splitter-h-line" })]);
+}
+
+/** A collapsible sidebar section's header row: a rotating caret plus its label, click anywhere on
+ * the row to toggle. Shared by the "SNMP (MIB)", "YANG (gNMI)", and "YANG (NETCONF)" sections. */
+function sidebarSectionHead(label: string, collapsed: boolean, onToggle: () => void): HTMLElement {
+  return el("button", { type: "button", class: "sidebar-section-head", "aria-expanded": collapsed ? "false" : "true", onclick: onToggle }, [
+    el("div", { class: "sidebar-section-caret", style: { transform: `rotate(${collapsed ? 0 : 90}deg)` } }, ["▶"]),
+    el("span", {}, [label]),
+  ]);
+}
+
+/** A resizable sidebar section's tree area's flex-basis: fills whatever space remains when it's
+ * the last expanded section (mirroring `PaneState.width`'s "null means flexible, but only ever for
+ * the actual last pane" convention), otherwise the explicit height its splitter was dragged to. */
+function sidebarTreeFlex(height: number, isLast: boolean): string {
+  return isLast ? "1 1 0%" : `0 0 ${height}px`;
+}
+
 function renderTabBar(store: Store, pane: PaneState): HTMLElement {
   const tabs = pane.tabs.map((tab) => {
     const active = tab.id === pane.activeTabId;
@@ -680,6 +762,9 @@ function renderTabBar(store: Store, pane: PaneState): HTMLElement {
       dotClass += tab.error ? " error" : tab.running ? "" : " off";
     } else if (tab.kind === "gnmi") {
       label = "gNMI · " + (tab.hostAddr || "(no target)");
+      dotClass += tab.fetchError ? " error" : "";
+    } else if (tab.kind === "netconf") {
+      label = "NETCONF · " + (tab.hostAddr || "(no target)");
       dotClass += tab.fetchError ? " error" : "";
     } else {
       const host = store.hostProfiles.find((h) => h.id === tab.hostId);
@@ -726,6 +811,7 @@ function renderTabBar(store: Store, pane: PaneState): HTMLElement {
       [trapListenerIcon()],
     ),
     el("button", { class: "pane-action", title: "New gNMI tab", onclick: () => store.openGnmiTab(pane.id) }, [gnmiTabIcon()]),
+    el("button", { class: "pane-action", title: "New NETCONF tab", onclick: () => store.openNetconfTab(pane.id) }, [netconfTabIcon()]),
     el("div", { class: "tab-bar-spacer" }),
     canSplit ? el("button", { class: "pane-action", title: "Split right", onclick: () => store.splitPane(pane.id) }, ["⊟"]) : null,
     canClosePane ? el("button", { class: "pane-action", title: "Close group", onclick: () => store.closePane(pane.id) }, ["✕"]) : null,
@@ -1254,6 +1340,8 @@ function renderPane(store: Store, pane: PaneState, isLast: boolean): HTMLElement
     body = renderBenchmarkPane(store, pane, tab);
   } else if (tab.kind === "gnmi") {
     body = renderGnmiPane(store, pane, tab);
+  } else if (tab.kind === "netconf") {
+    body = renderNetconfPane(store, pane, tab);
   } else {
     body = [renderToolbar(store, pane, tab), renderTableToolbar(store, pane, tab), renderTable(store, pane, tab), renderStatusBar(tab)];
   }
@@ -2049,8 +2137,11 @@ function renderYangTreeRow(store: Store, node: YangNode, depth: number): HTMLEle
 
 /** The YANG directories/profile UI plus the schema tree, shown in the left sidebar below the MIB
  * section - the gNMI counterpart to the MIB directory list and OID tree above it. Clicking a node
- * stages its path into whichever gNMI tab is currently active (see `Store.selectYangNode`). */
-function renderYangSection(store: Store): HTMLElement[] {
+ * stages its path into whichever gNMI tab is currently active (see `Store.selectYangNode`).
+ * `isLast` - whether this is the last expanded sidebar section - is threaded down to its tree
+ * area's flex-basis; see `sidebarTreeFlex()`. */
+function renderYangSection(store: Store, isLast: boolean): (HTMLElement | null)[] {
+  const collapsed = store.state.yangSectionCollapsed;
   const activeProfile = store.activeYangProfile();
   const errors = store.state.yangParseErrors;
   const dirRows: HTMLElement[] = (activeProfile?.dirs ?? []).flatMap((dir) => {
@@ -2216,9 +2307,13 @@ function renderYangSection(store: Store): HTMLElement[] {
         ]);
 
   const treeRows = store.yangTree.flatMap((n) => renderYangTreeRow(store, n, 0));
+  const startHeight = store.state.yangTreeHeight;
+
+  const head = sidebarSectionHead("YANG (gNMI)", collapsed, () => store.toggleYangSectionCollapsed());
+  if (collapsed) return [head];
 
   return [
-    el("div", { class: "sidebar-section-head" }, ["YANG (gNMI)"]),
+    head,
     el("div", { class: "mib-dirs" }, [
       profileRow,
       renameRow,
@@ -2243,14 +2338,447 @@ function renderYangSection(store: Store): HTMLElement[] {
     ]),
     el(
       "div",
-      { class: "tree", "data-preserve-scroll": "yangTree" },
+      { class: "tree", "data-preserve-scroll": "yangTree", style: { flex: sidebarTreeFlex(startHeight, isLast) } },
       treeRows.length ? treeRows : [el("div", { class: "table-empty" }, ["No YANG files found - add a directory above."])],
     ),
+    isLast ? null : renderSplitterH((e) => startDragY(e, (dy) => store.setYangTreeHeight(startHeight + dy))),
+  ];
+}
+
+function renderNetconfYangTreeRow(store: Store, node: YangNode, depth: number): HTMLElement[] {
+  const expandKey = `netconf-yang:${node.id}`;
+  const hasChildren = node.children.length > 0;
+  const expanded = !!store.state.expanded[expandKey];
+  const selected = node.id === store.state.selectedNetconfYangNodeId;
+  const textColor = selected ? "var(--tree-selected-text)" : "var(--tree-item-text)";
+  const bg = selected ? "var(--accent-selected-bg)" : "transparent";
+  const row = el(
+    "div",
+    {
+      class: "tree-row",
+      title: node.path || `${node.label} could not be resolved`,
+      style: { paddingLeft: depth * 16 + 2 + "px", opacity: node.resolved ? "1" : "0.45" },
+      onclick: () => store.selectNetconfYangNode(node),
+      ondblclick: () => store.openNetconfYangNodeInNewTab(node),
+      oncontextmenu: (e: MouseEvent) => {
+        e.preventDefault();
+        store.openNetconfYangTreeContextMenu(e.clientX, e.clientY, node.id);
+      },
+    },
+    [
+      el("div", { class: "tree-row-bg", style: { background: bg } }, [
+        el(
+          "div",
+          {
+            class: "tree-caret",
+            style: { visibility: hasChildren ? "visible" : "hidden", transform: `rotate(${hasChildren && expanded ? 90 : 0}deg)` },
+            onclick: hasChildren
+              ? (e: MouseEvent) => {
+                  e.stopPropagation();
+                  store.toggleExpand(expandKey);
+                }
+              : undefined,
+          },
+          ["▶"],
+        ),
+        nodeIcon(node),
+        el("div", { class: "tree-label", style: { color: textColor, fontWeight: selected ? "600" : "400" } }, [node.label]),
+        copyButton("tree-copy-btn", node.path || node.label, `Copy ${node.path ? "path" : "name"}`),
+      ]),
+    ],
+  );
+  const out: HTMLElement[] = [row];
+  if (hasChildren && expanded) {
+    for (const child of node.children) out.push(...renderNetconfYangTreeRow(store, child, depth + 1));
+  }
+  return out;
+}
+
+/** The NETCONF-side counterpart to `renderYangSection`, over its own separate profile/directory
+ * state and schema tree (`netconfYang*`) - see `NetconfYangProfile`'s doc comment for why NETCONF
+ * doesn't just reuse gNMI's YANG section. Clicking a node stages its path into whichever NETCONF
+ * tab is currently active (see `Store.selectNetconfYangNode`). `isLast` - see `renderYangSection`. */
+function renderNetconfYangSection(store: Store, isLast: boolean): (HTMLElement | null)[] {
+  const collapsed = store.state.netconfYangSectionCollapsed;
+  const activeProfile = store.activeNetconfYangProfile();
+  const errors = store.state.netconfYangParseErrors;
+  const dirRows: HTMLElement[] = (activeProfile?.dirs ?? []).flatMap((dir) => {
+    const files = store.netconfYangDirFiles.find((d) => d.dir === dir)?.files ?? [];
+    const expandKey = `netconf-yangdir:${dir}`;
+    const expanded = files.length > 0 && !!store.state.expanded[expandKey];
+
+    const row = el("div", { class: "mib-dir-row" }, [
+      el(
+        "div",
+        {
+          class: "mib-dir-caret",
+          style: { visibility: files.length ? "visible" : "hidden", transform: `rotate(${expanded ? 90 : 0}deg)` },
+          onclick: files.length ? () => store.toggleExpand(expandKey) : undefined,
+        },
+        ["▶"],
+      ),
+      el("div", { class: "mib-dir-icon" }),
+      el("div", { class: "mib-dir-path", title: dir }, [dir]),
+      el("button", { class: "mib-dir-remove", title: "Remove directory", onclick: () => void store.removeNetconfYangDir(dir) }, ["×"]),
+    ]);
+
+    if (!expanded) return [row];
+
+    const fileRows = files.map((file) => {
+      const fileErrors = errors.find((fe) => fe.file === file)?.errors;
+      const hasIssue = !!fileErrors?.length;
+      const relativePath = file.startsWith(dir) ? file.slice(dir.length).replace(/^[/\\]/, "") : file;
+      const title = hasIssue ? `${file}\n\n${fileErrors!.join("\n")}` : file;
+      return el("div", { class: "mib-file-row", title }, [
+        el("div", { class: "mib-file-icon" + (hasIssue ? " mib-file-icon-issue" : "") }),
+        el("div", { class: "mib-file-name" + (hasIssue ? " mib-file-name-issue" : "") }, [relativePath]),
+      ]);
+    });
+
+    return [row, ...fileRows];
+  });
+  if (errors.length) {
+    const issueCount = errors.reduce((n, fe) => n + fe.errors.length, 0);
+    dirRows.push(
+      el(
+        "button",
+        { class: "mib-dir-warning", onclick: () => store.toggleNetconfYangParseErrors() },
+        [`⚠ ${issueCount} issue${issueCount === 1 ? "" : "s"} while parsing`],
+      ),
+    );
+  }
+
+  const draft = store.state.netconfYangDirDraft;
+  const draftRow =
+    draft === null
+      ? null
+      : el("div", { class: "mib-dir-draft-row" }, [
+          el("input", {
+            class: "mib-dir-draft-input netconf-yang-dir-draft-input",
+            placeholder: "/absolute/path/to/yang",
+            value: draft,
+            "data-focus-key": "netconfYangDirDraft",
+            oninput: (e: Event) => store.updateNetconfYangDirDraft((e.target as HTMLInputElement).value),
+            onkeydown: (e: KeyboardEvent) => {
+              if (e.key === "Enter") void store.submitNetconfYangDirDraft();
+              else if (e.key === "Escape") store.cancelNetconfYangDirDraft();
+            },
+          }),
+          el("button", { class: "mib-dir-draft-confirm", title: "Add", onclick: () => void store.submitNetconfYangDirDraft() }, ["✓"]),
+          el("button", { class: "mib-dir-draft-cancel", title: "Cancel", onclick: () => store.cancelNetconfYangDirDraft() }, ["×"]),
+        ]);
+
+  const profiles = store.state.netconfYangProfiles;
+  const canDeleteProfile = profiles.length > 1;
+  const profileRow = el("div", { class: "mib-profile-row" }, [
+    el(
+      "select",
+      {
+        class: "mib-profile-select",
+        value: store.state.activeNetconfYangProfileId,
+        onchange: (e: Event) => void store.switchNetconfYangProfile((e.target as HTMLSelectElement).value),
+      },
+      profiles.map((p) => el("option", { value: p.id }, [p.name])),
+    ),
+    el(
+      "button",
+      {
+        class: "mib-profile-btn",
+        title: "Rename profile",
+        onclick: () => {
+          store.startRenamingNetconfYangProfile();
+          document.querySelector<HTMLInputElement>(".netconf-yang-profile-rename-input")?.select();
+        },
+      },
+      ["✎"],
+    ),
+    canDeleteProfile
+      ? el(
+          "button",
+          {
+            class: "mib-profile-btn",
+            title: "Delete profile",
+            onclick: () => void store.removeNetconfYangProfile(store.state.activeNetconfYangProfileId),
+          },
+          ["×"],
+        )
+      : null,
+    el(
+      "button",
+      {
+        class: "mib-profile-btn",
+        title: "New profile",
+        onclick: () => {
+          store.startNetconfYangProfileDraft();
+          document.querySelector<HTMLInputElement>(".netconf-yang-profile-draft-input")?.focus();
+        },
+      },
+      ["+"],
+    ),
+  ]);
+
+  const renameRow = store.state.renamingNetconfYangProfile
+    ? el("div", { class: "mib-dir-draft-row" }, [
+        el("input", {
+          class: "mib-dir-draft-input netconf-yang-profile-rename-input",
+          value: activeProfile?.name ?? "",
+          "data-focus-key": "netconfYangProfileRename",
+          onkeydown: (e: KeyboardEvent) => {
+            if (e.key === "Enter") void store.renameNetconfYangProfile(store.state.activeNetconfYangProfileId, (e.target as HTMLInputElement).value);
+            else if (e.key === "Escape") store.cancelRenamingNetconfYangProfile();
+          },
+        }),
+        el(
+          "button",
+          {
+            class: "mib-dir-draft-confirm",
+            title: "Save",
+            onclick: () => {
+              const input = document.querySelector<HTMLInputElement>(".netconf-yang-profile-rename-input");
+              void store.renameNetconfYangProfile(store.state.activeNetconfYangProfileId, input?.value ?? "");
+            },
+          },
+          ["✓"],
+        ),
+        el("button", { class: "mib-dir-draft-cancel", title: "Cancel", onclick: () => store.cancelRenamingNetconfYangProfile() }, ["×"]),
+      ])
+    : null;
+
+  const profileDraft = store.state.netconfYangProfileDraft;
+  const profileDraftRow =
+    profileDraft === null
+      ? null
+      : el("div", { class: "mib-dir-draft-row" }, [
+          el("input", {
+            class: "mib-dir-draft-input netconf-yang-profile-draft-input",
+            placeholder: "Profile name",
+            value: profileDraft,
+            "data-focus-key": "netconfYangProfileDraft",
+            oninput: (e: Event) => store.updateNetconfYangProfileDraft((e.target as HTMLInputElement).value),
+            onkeydown: (e: KeyboardEvent) => {
+              if (e.key === "Enter") void store.submitNetconfYangProfileDraft();
+              else if (e.key === "Escape") store.cancelNetconfYangProfileDraft();
+            },
+          }),
+          el("button", { class: "mib-dir-draft-confirm", title: "Create", onclick: () => void store.submitNetconfYangProfileDraft() }, ["✓"]),
+          el("button", { class: "mib-dir-draft-cancel", title: "Cancel", onclick: () => store.cancelNetconfYangProfileDraft() }, ["×"]),
+        ]);
+
+  const treeRows = store.netconfYangTree.flatMap((n) => renderNetconfYangTreeRow(store, n, 0));
+  const startHeight = store.state.netconfYangTreeHeight;
+
+  const head = sidebarSectionHead("YANG (NETCONF)", collapsed, () => store.toggleNetconfYangSectionCollapsed());
+  if (collapsed) return [head];
+
+  return [
+    head,
+    el("div", { class: "mib-dirs" }, [
+      profileRow,
+      renameRow,
+      profileDraftRow,
+      el("div", { class: "mib-dirs-head" }, [
+        el("div", { class: "mib-dirs-title" }, ["YANG Directories"]),
+        el(
+          "button",
+          {
+            class: "mib-dir-add",
+            title: "Add YANG directory",
+            onclick: () => {
+              void store.addNetconfYangDir();
+              document.querySelector<HTMLInputElement>(".netconf-yang-dir-draft-input")?.focus();
+            },
+          },
+          ["+"],
+        ),
+      ]),
+      el("div", { class: "mib-dir-list" }, dirRows),
+      draftRow,
+    ]),
+    el(
+      "div",
+      { class: "tree", "data-preserve-scroll": "netconfYangTree", style: { flex: sidebarTreeFlex(startHeight, isLast) } },
+      treeRows.length ? treeRows : [el("div", { class: "table-empty" }, ["No YANG files found - add a directory above."])],
+    ),
+    isLast ? null : renderSplitterH((e) => startDragY(e, (dy) => store.setNetconfYangTreeHeight(startHeight + dy))),
   ];
 }
 
 function renderGnmiPane(store: Store, pane: PaneState, tab: GnmiTabState): HTMLElement[] {
   return [renderGnmiToolbar(store, pane, tab), renderGnmiBody(store, pane, tab)];
+}
+
+/** The NETCONF-tab counterpart to `renderGnmiToolbar`: address/port/username/password (SSH,
+ * password auth only in Phase 1 - see `netconf.rs`) instead of gNMI's address/port/TLS/username/
+ * password, otherwise the same Capabilities-button-plus-path-and-Get-row shape. */
+function renderNetconfToolbar(store: Store, pane: PaneState, tab: NetconfTabState): HTMLElement {
+  const fields: HTMLElement[] = [
+    el("div", { class: "field" }, [
+      el("label", { class: "field-label" }, ["Address"]),
+      el("input", {
+        class: "field-input field-addr field-mono",
+        value: tab.hostAddr,
+        disabled: tab.loading,
+        "data-focus-key": `netconf:${tab.id}:addr`,
+        oninput: (e: Event) => store.updateActiveNetconfTabInPane(pane.id, { hostAddr: (e.target as HTMLInputElement).value }),
+      }),
+    ]),
+    el("div", { class: "field" }, [
+      el("label", { class: "field-label" }, ["Port"]),
+      el("input", {
+        class: "field-input field-port field-mono",
+        value: tab.hostPort,
+        disabled: tab.loading,
+        "data-focus-key": `netconf:${tab.id}:port`,
+        oninput: (e: Event) => store.updateActiveNetconfTabInPane(pane.id, { hostPort: (e.target as HTMLInputElement).value }),
+      }),
+    ]),
+    el("div", { class: "field" }, [
+      el("label", { class: "field-label" }, ["Username"]),
+      el("input", {
+        class: "field-input field-v3-user",
+        value: tab.username,
+        disabled: tab.loading,
+        "data-focus-key": `netconf:${tab.id}:username`,
+        oninput: (e: Event) => store.updateActiveNetconfTabInPane(pane.id, { username: (e.target as HTMLInputElement).value }),
+      }),
+    ]),
+    el("div", { class: "field" }, [
+      el("label", { class: "field-label" }, ["Password"]),
+      el("input", {
+        type: "password",
+        class: "field-input field-v3-secret",
+        value: tab.password,
+        disabled: tab.loading,
+        "data-focus-key": `netconf:${tab.id}:password`,
+        oninput: (e: Event) => store.updateActiveNetconfTabInPane(pane.id, { password: (e.target as HTMLInputElement).value }),
+      }),
+    ]),
+  ];
+
+  const canRun = store.hasCompleteNetconfConnection(tab);
+  const runDisabledReason = canRun ? "" : "Fill in the target address, port, username, and password first";
+  fields.push(el("div", { class: "spacer" }));
+  fields.push(
+    el(
+      "button",
+      {
+        class: "toolbar-btn",
+        disabled: !canRun || tab.loading,
+        title: runDisabledReason,
+        onclick: () => void store.runNetconfCapabilities(pane.id),
+      },
+      ["Capabilities"],
+    ),
+  );
+
+  const pathRow = el("div", { class: "toolbar-row" }, [
+    el("div", { class: "field", style: { flex: "1" } }, [
+      el("label", { class: "field-label" }, ["Path"]),
+      el("input", {
+        class: "field-input field-mono",
+        style: { width: "100%" },
+        placeholder: "/interfaces/interface[name='eth0']",
+        value: tab.path,
+        disabled: tab.loading,
+        "data-focus-key": `netconf:${tab.id}:path`,
+        oninput: (e: Event) => store.updateActiveNetconfTabInPane(pane.id, { path: (e.target as HTMLInputElement).value }),
+      }),
+    ]),
+    el(
+      "button",
+      {
+        class: "split-btn-main",
+        style: { borderRadius: "7px", alignSelf: "flex-end", height: "28px" },
+        disabled: !canRun || tab.loading || !tab.path.trim(),
+        title: runDisabledReason,
+        onclick: () => void store.runNetconfGet(pane.id),
+      },
+      [tab.loading ? "Fetching…" : "Get"],
+    ),
+  ]);
+
+  return el("div", { class: "toolbar" }, [el("div", { class: "toolbar-row" }, fields), pathRow]);
+}
+
+/** Stable identity for a NETCONF result node's expand/collapse state. Unlike `gnmiNodeKey` (whose
+ * gNMI path elements already carry list keys), this includes the sibling index: an XML `<get>`
+ * reply repeats element names for list entries (e.g. two `<interface>` under `<interfaces>`), so
+ * the name alone isn't unique among siblings. */
+function netconfNodeKey(parentKey: string, node: NetconfNode, index: number): string {
+  const self = `${node.name}[${index}]`;
+  return parentKey ? `${parentKey}/${self}` : self;
+}
+
+function renderNetconfNode(store: Store, pane: PaneState, tab: NetconfTabState, node: NetconfNode, parentKey: string, depth: number, index: number): HTMLElement[] {
+  const key = netconfNodeKey(parentKey, node, index);
+  const hasChildren = node.children.length > 0;
+  const expanded = !!tab.expandedIds[key];
+  const row = el(
+    "div",
+    {
+      class: "gnmi-tree-row",
+      style: { paddingLeft: depth * 16 + 2 + "px" },
+      title: key,
+      onclick: hasChildren ? () => store.toggleNetconfNodeExpanded(pane.id, key) : undefined,
+    },
+    [
+      el(
+        "div",
+        {
+          class: "gnmi-tree-caret",
+          style: { visibility: hasChildren ? "visible" : "hidden", transform: `rotate(${hasChildren && expanded ? 90 : 0}deg)` },
+          onclick: hasChildren
+            ? (e: MouseEvent) => {
+                e.stopPropagation();
+                store.toggleNetconfNodeExpanded(pane.id, key);
+              }
+            : undefined,
+        },
+        ["▶"],
+      ),
+      gnmiNodeIcon(hasChildren),
+      el("span", { class: "gnmi-tree-name" }, [node.name]),
+      node.value != null ? el("span", { class: "gnmi-tree-value" }, [node.value]) : null,
+      copyButton("tree-copy-btn", node.value ?? node.name, `Copy ${node.value != null ? "value" : "name"}`),
+    ],
+  );
+  const out: HTMLElement[] = [row];
+  if (hasChildren && expanded) {
+    node.children.forEach((child, childIndex) => out.push(...renderNetconfNode(store, pane, tab, child, key, depth + 1, childIndex)));
+  }
+  return out;
+}
+
+function renderNetconfCapabilities(caps: NonNullable<NetconfTabState["capabilities"]>): HTMLElement {
+  return el("div", { class: "gnmi-caps" }, [
+    el("div", { class: "gnmi-caps-row" }, [el("span", { class: "gnmi-caps-label" }, ["Session ID"]), caps.sessionId || "(none reported)"]),
+    el("div", { class: "gnmi-caps-row" }, [el("span", { class: "gnmi-caps-label" }, ["Capabilities"]), String(caps.capabilities.length)]),
+    el(
+      "div",
+      { class: "gnmi-caps-models" },
+      caps.capabilities.map((c) => el("div", { class: "gnmi-caps-model" }, [c])),
+    ),
+  ]);
+}
+
+function renderNetconfBody(store: Store, pane: PaneState, tab: NetconfTabState): HTMLElement {
+  if (tab.fetchError) {
+    return el("div", { class: "table-scroll" }, [el("div", { class: "table-empty" }, [tab.fetchError])]);
+  }
+  if (tab.result) {
+    const rows = tab.result.flatMap((n, index) => renderNetconfNode(store, pane, tab, n, "", 0, index));
+    return el("div", { class: "table-scroll" }, [el("div", { class: "gnmi-tree" }, rows)]);
+  }
+  if (tab.capabilities) {
+    return el("div", { class: "table-scroll" }, [renderNetconfCapabilities(tab.capabilities)]);
+  }
+  return el("div", { class: "table-scroll" }, [
+    el("div", { class: "table-empty" }, ["Enter a target and path, then click Get - or click Capabilities to see what the target supports."]),
+  ]);
+}
+
+function renderNetconfPane(store: Store, pane: PaneState, tab: NetconfTabState): HTMLElement[] {
+  return [renderNetconfToolbar(store, pane, tab), renderNetconfBody(store, pane, tab)];
 }
 
 function renderPaneGroup(store: Store): HTMLElement {
@@ -2284,7 +2812,10 @@ export function renderApp(store: Store): HTMLElement {
     overlays.push(renderParseErrorsModal("Parse issues", store.state.parseErrors, () => store.toggleParseErrors()));
   }
   if (store.state.yangParseErrorsOpen && store.state.yangParseErrors.length > 0) {
-    overlays.push(renderParseErrorsModal("YANG parse issues", store.state.yangParseErrors, () => store.toggleYangParseErrors()));
+    overlays.push(renderParseErrorsModal("gNMI YANG parse issues", store.state.yangParseErrors, () => store.toggleYangParseErrors()));
+  }
+  if (store.state.netconfYangParseErrorsOpen && store.state.netconfYangParseErrors.length > 0) {
+    overlays.push(renderParseErrorsModal("NETCONF YANG parse issues", store.state.netconfYangParseErrors, () => store.toggleNetconfYangParseErrors()));
   }
   const contextMenu = renderTreeContextMenu(store);
   if (contextMenu) overlays.push(contextMenu);

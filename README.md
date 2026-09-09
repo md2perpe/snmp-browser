@@ -1,8 +1,8 @@
 # SNMP MIB Client
 
-A desktop app for browsing MIB and YANG files and polling live values from SNMP- and gNMI-managed devices — switches, routers, and similar network equipment.
+A desktop app for browsing MIB and YANG files and polling live values from SNMP-, gNMI-, and NETCONF-managed devices — switches, routers, and similar network equipment.
 
-Point it at your MIB or YANG directories and it parses them into a browsable tree; pick a scalar, table, or path, connect to a device (SNMPv1/v2c/v3 or gNMI), and fetch live values in a sortable, diffable table view.
+Point it at your MIB or YANG directories and it parses them into a browsable tree; pick a scalar, table, or path, connect to a device (SNMPv1/v2c/v3, gNMI, or NETCONF), and fetch live values in a sortable, diffable table view.
 
 ## Features
 
@@ -15,7 +15,8 @@ Point it at your MIB or YANG directories and it parses them into a browsable tre
 - **Readable column names** and **DISPLAY-HINT-aware formatting** for raw MIB identifiers and numeric values.
 - **Walk benchmark** — time repeated SNMP walks of any subtree and see min/median/mean/P95/max/std dev across the runs.
 - **gNMI support** — browse a target's advertised Capabilities and run Get requests against any path, over TLS (with an optional skip-verify mode).
-- **YANG parsing** — parses `.yang` directories into a browsable path tree, the gNMI-side counterpart to MIB parsing.
+- **NETCONF support** — browse a target's advertised `<hello>` capabilities and run `<get>` requests over SSH, filtered by an XPath path built from the same YANG tree gNMI uses.
+- **YANG parsing** — parses `.yang` directories into a browsable path tree, shared by both gNMI and NETCONF.
 - **Trap and inform listener** — listen for SNMPv1/v2c/v3 traps and informs, decoded live and labeled against your parsed MIBs, with a filterable event log.
 
 See [USAGE.md](USAGE.md) for a full walkthrough.
@@ -23,7 +24,7 @@ See [USAGE.md](USAGE.md) for a full walkthrough.
 ## Tech stack
 
 - **Frontend**: TypeScript + [Vite](https://vitejs.dev/), no framework.
-- **Backend**: [Tauri 2](https://tauri.app/) (Rust), using [`snmp2`](https://crates.io/crates/snmp2) for SNMP, [`tonic`](https://github.com/hyperium/tonic)/`prost` for gNMI over gRPC, and [`tree-sitter`](https://tree-sitter.github.io/tree-sitter/) with custom ASN.1 and YANG grammars to parse MIB and YANG files.
+- **Backend**: [Tauri 2](https://tauri.app/) (Rust), using [`snmp2`](https://crates.io/crates/snmp2) for SNMP, [`tonic`](https://github.com/hyperium/tonic)/`prost` for gNMI over gRPC, [`russh`](https://github.com/Eugeny/russh)/`quick-xml` for NETCONF over SSH, and [`tree-sitter`](https://tree-sitter.github.io/tree-sitter/) with custom ASN.1 and YANG grammars to parse MIB and YANG files.
 
 ## Development
 

@@ -36,8 +36,10 @@ tonic = { version = "0.14", features = ["tls-ring"] }
 tonic-prost = "0.14"
 prost = "0.14"
 prost-types = "0.14"
-tokio = { version = "1", features = ["rt", "rt-multi-thread"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "net", "time", "io-util"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+russh = "0.63.2"
+quick-xml = "0.42.0"
 tauri-plugin-updater = "2.11.0"
 tauri-plugin-process = "2.3.1"
 

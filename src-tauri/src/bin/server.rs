@@ -5,7 +5,7 @@
 //! with CORS enabled so a Vite dev server on a different port can call it.
 
 use serde_json::{json, Value};
-use snmp_mib_client_lib::{gnmi, mib, settings, snmp, trap, yang};
+use snmp_mib_client_lib::{gnmi, mib, netconf, settings, snmp, trap, yang};
 use std::io::Read;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -69,9 +69,13 @@ fn yang_profiles_response(settings: &settings::Settings) -> Value {
     json!({ "profiles": settings.yang_profiles, "activeProfileId": settings.active_yang_profile_id })
 }
 
+fn netconf_yang_profiles_response(settings: &settings::Settings) -> Value {
+    json!({ "profiles": settings.netconf_yang_profiles, "activeProfileId": settings.active_netconf_yang_profile_id })
+}
+
 /// Mirrors the command dispatch in `lib.rs`'s `invoke_handler!`, minus the
-/// Tauri-specific plumbing. `rt` bridges the two `gnmi_*` commands (the only
-/// async ones) into this otherwise fully synchronous, single-threaded loop.
+/// Tauri-specific plumbing. `rt` bridges the `gnmi_*` and `netconf_*` commands
+/// (the only async ones) into this otherwise fully synchronous, single-threaded loop.
 fn handle(state: &AppState, rt: &tokio::runtime::Runtime, cmd: &str, args: &Value) -> Result<Value, (u16, String)> {
     match cmd {
         "list_mib_profiles" => Ok(profiles_response(&state.settings.lock().unwrap())),
@@ -233,6 +237,88 @@ fn handle(state: &AppState, rt: &tokio::runtime::Runtime, cmd: &str, args: &Valu
             Ok(serde_json::to_value(yang::parse_directories(&dirs)).unwrap())
         }
 
+        "list_netconf_yang_profiles" => Ok(netconf_yang_profiles_response(&state.settings.lock().unwrap())),
+
+        "add_netconf_yang_profile" => {
+            let name = args.get("name").and_then(Value::as_str).ok_or((400, "missing 'name'".to_string()))?.to_string();
+            let resp = {
+                let mut s = state.settings.lock().unwrap();
+                s.add_netconf_yang_profile(name);
+                netconf_yang_profiles_response(&s)
+            };
+            state.save();
+            Ok(resp)
+        }
+
+        "remove_netconf_yang_profile" => {
+            let id = args.get("id").and_then(Value::as_str).ok_or((400, "missing 'id'".to_string()))?.to_string();
+            let resp = {
+                let mut s = state.settings.lock().unwrap();
+                s.remove_netconf_yang_profile(&id);
+                netconf_yang_profiles_response(&s)
+            };
+            state.save();
+            Ok(resp)
+        }
+
+        "rename_netconf_yang_profile" => {
+            let id = args.get("id").and_then(Value::as_str).ok_or((400, "missing 'id'".to_string()))?.to_string();
+            let name = args.get("name").and_then(Value::as_str).ok_or((400, "missing 'name'".to_string()))?.to_string();
+            let resp = {
+                let mut s = state.settings.lock().unwrap();
+                s.rename_netconf_yang_profile(&id, name);
+                netconf_yang_profiles_response(&s)
+            };
+            state.save();
+            Ok(resp)
+        }
+
+        "set_active_netconf_yang_profile" => {
+            let id = args.get("id").and_then(Value::as_str).ok_or((400, "missing 'id'".to_string()))?.to_string();
+            let resp = {
+                let mut s = state.settings.lock().unwrap();
+                if s.netconf_yang_profiles.iter().any(|p| p.id == id) {
+                    s.active_netconf_yang_profile_id = id;
+                }
+                netconf_yang_profiles_response(&s)
+            };
+            state.save();
+            Ok(resp)
+        }
+
+        "add_netconf_yang_dir" => {
+            let path = args.get("path").and_then(Value::as_str).ok_or((400, "missing 'path'".to_string()))?.to_string();
+            let resp = {
+                let mut s = state.settings.lock().unwrap();
+                if let Some(p) = s.active_netconf_yang_profile_mut() {
+                    if !p.dirs.contains(&path) {
+                        p.dirs.push(path);
+                    }
+                }
+                netconf_yang_profiles_response(&s)
+            };
+            state.save();
+            Ok(resp)
+        }
+
+        "remove_netconf_yang_dir" => {
+            let path = args.get("path").and_then(Value::as_str).ok_or((400, "missing 'path'".to_string()))?.to_string();
+            let resp = {
+                let mut s = state.settings.lock().unwrap();
+                if let Some(p) = s.active_netconf_yang_profile_mut() {
+                    p.dirs.retain(|d| d != &path);
+                }
+                netconf_yang_profiles_response(&s)
+            };
+            state.save();
+            Ok(resp)
+        }
+
+        "get_netconf_yang_tree" => {
+            let dirs = state.settings.lock().unwrap().active_netconf_yang_profile().map(|p| p.dirs.clone()).unwrap_or_default();
+            Ok(serde_json::to_value(yang::parse_directories(&dirs)).unwrap())
+        }
+
         "list_host_profiles" => Ok(json!(state.settings.lock().unwrap().host_profiles.clone())),
 
         "get_mib_tree" => {
@@ -334,6 +420,25 @@ fn handle(state: &AppState, rt: &tokio::runtime::Runtime, cmd: &str, args: &Valu
             .map_err(|e| (400, e.to_string()))?;
             let path = args.get("path").and_then(Value::as_str).ok_or((400, "missing 'path'".to_string()))?.to_string();
             rt.block_on(gnmi::get(&connection, &path)).map(|r| serde_json::to_value(&r).unwrap()).map_err(|e| (400, e))
+        }
+
+        "netconf_capabilities" => {
+            let connection: netconf::NetconfConnectionParams = serde_json::from_value(
+                args.get("connection").cloned().ok_or((400, "missing 'connection'".to_string()))?,
+            )
+            .map_err(|e| (400, e.to_string()))?;
+            rt.block_on(netconf::capabilities(&connection)).map(|r| serde_json::to_value(&r).unwrap()).map_err(|e| (400, e))
+        }
+
+        "netconf_get" => {
+            let connection: netconf::NetconfConnectionParams = serde_json::from_value(
+                args.get("connection").cloned().ok_or((400, "missing 'connection'".to_string()))?,
+            )
+            .map_err(|e| (400, e.to_string()))?;
+            let path = args.get("path").and_then(Value::as_str).ok_or((400, "missing 'path'".to_string()))?.to_string();
+            let dirs = state.settings.lock().unwrap().active_netconf_yang_profile().map(|p| p.dirs.clone()).unwrap_or_default();
+            let parsed = yang::parse_directories(&dirs);
+            rt.block_on(netconf::get(&connection, &path, &parsed.module_namespaces)).map(|r| serde_json::to_value(&r).unwrap()).map_err(|e| (400, e))
         }
 
         "write_export_file" => {

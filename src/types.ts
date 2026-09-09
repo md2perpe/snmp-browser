@@ -68,6 +68,19 @@ export interface YangProfilesResponse {
   activeProfileId: string;
 }
 
+/** The NETCONF-side counterpart to `YangProfile` - a separate named set of `.yang` directories,
+ * not shared with gNMI's (see the Rust `NetconfYangProfile`'s doc comment). */
+export interface NetconfYangProfile {
+  id: string;
+  name: string;
+  dirs: string[];
+}
+
+export interface NetconfYangProfilesResponse {
+  profiles: NetconfYangProfile[];
+  activeProfileId: string;
+}
+
 export interface HostProfile {
   id: string;
   label: string;
@@ -228,6 +241,50 @@ export interface GnmiCapabilities {
   supportedModels: { name: string; organization: string; version: string }[];
 }
 
+/** The connection half of a NETCONF request (SSH, password auth only in Phase 1), as the Rust `netconf::NetconfConnectionParams` expects it. */
+export interface NetconfConnectionParams {
+  hostAddr: string;
+  hostPort: string;
+  username: string;
+  password: string;
+}
+
+/** One element of a decoded NETCONF `<get>` reply tree - the NETCONF-side counterpart to `GnmiNode`. */
+export interface NetconfNode {
+  name: string;
+  value: string | null;
+  children: NetconfNode[];
+}
+
+/** A target's advertised NETCONF session id and capability URIs, from the `<hello>` exchange. */
+export interface NetconfCapabilities {
+  sessionId: string;
+  capabilities: string[];
+}
+
+/** A pane tab dedicated to browsing a NETCONF target over SSH: a `<hello>` capabilities check and
+ * one-shot `<get>` requests filtered by an XPath path staged from the shared YANG tree - the
+ * NETCONF counterpart to `GnmiTabState`. */
+export interface NetconfTabState {
+  kind: "netconf";
+  id: string;
+  hostAddr: string;
+  hostPort: string;
+  username: string;
+  password: string;
+  /** Manually-typed XPath-style path, e.g. "/interfaces/interface[name='eth0']"; "/" fetches the whole datastore. */
+  path: string;
+  /** Last successful `<hello>` capabilities, or null before the first call. */
+  capabilities: NetconfCapabilities | null;
+  /** Last successful `<get>` result's roots, or null before the first fetch. */
+  result: NetconfNode[] | null;
+  /** Tree-expand state for `result`, keyed by each node's path-so-far. */
+  expandedIds: Record<string, boolean>;
+  loading: boolean;
+  fetchError: string | null;
+  lastFetch: string;
+}
+
 export interface TrapVarbind {
   oid: string;
   /** MIB-resolved name (e.g. "ifDescr.3"), or the same as `oid` when nothing matched. */
@@ -285,7 +342,7 @@ export interface TrapTabState {
   useDisplayHints: boolean;
 }
 
-export type AnyTabState = TabState | TrapTabState | BenchmarkTabState | GnmiTabState;
+export type AnyTabState = TabState | TrapTabState | BenchmarkTabState | GnmiTabState | NetconfTabState;
 
 export interface PaneState {
   id: string;
@@ -323,12 +380,34 @@ export interface AppState {
   yangParseErrorsOpen: boolean;
   /** Id of the YANG tree row highlighted by a single click - the YANG counterpart to `selectedTreeNodeId`. */
   selectedYangNodeId: string;
+  /** The NETCONF-side counterpart to `yangProfiles` and its surrounding UI state - kept entirely
+   * separate rather than shared with gNMI's, since a target's NETCONF YANG modules commonly come
+   * from a different directory than what's loaded for gNMI (see the Rust `NetconfYangProfile`). */
+  netconfYangProfiles: NetconfYangProfile[];
+  activeNetconfYangProfileId: string;
+  netconfYangDirDraft: string | null;
+  netconfYangProfileDraft: string | null;
+  renamingNetconfYangProfile: boolean;
+  netconfYangParseErrors: FileErrors[];
+  netconfYangParseErrorsOpen: boolean;
+  selectedNetconfYangNodeId: string;
+  /** Whether the "SNMP (MIB)" sidebar section (profile/directories/tree) is collapsed to just its header. */
+  mibSectionCollapsed: boolean;
+  /** Explicit height (px) of the MIB tree area, dragged via the splitter below it. Ignored (the
+   * section fills whatever space remains instead) when this is the last expanded sidebar section -
+   * the same "explicit except for the trailing flexible one" convention `PaneState.width` uses. */
+  mibTreeHeight: number;
+  /** The gNMI/NETCONF YANG sections' counterparts to the two fields above. */
+  yangSectionCollapsed: boolean;
+  yangTreeHeight: number;
+  netconfYangSectionCollapsed: boolean;
+  netconfYangTreeHeight: number;
   leftWidth: number;
   leftCollapsed: boolean;
   panes: PaneState[];
   activePaneId: string;
-  /** Right-click context menu on a tree node (MIB or YANG); null when closed. */
-  treeContextMenu: { x: number; y: number; nodeId: string; kind: "mib" | "yang" } | null;
+  /** Right-click context menu on a tree node (MIB, gNMI's YANG, or NETCONF's YANG); null when closed. */
+  treeContextMenu: { x: number; y: number; nodeId: string; kind: "mib" | "yang" | "netconf-yang" } | null;
   /** Fetch mode dropdown (manual vs. auto-refresh) for a pane's split button; null when closed. */
   refreshMenu: { paneId: string; x: number; y: number } | null;
   /** Export-format dropdown (CSV vs. PNG) for a pane's export button; null when closed. */

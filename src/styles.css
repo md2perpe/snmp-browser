@@ -202,18 +202,35 @@ button {
   padding-top: 3px;
 }
 
-/* Labels a group of sidebar sections (SNMP's MIB dirs+tree, gNMI's YANG dirs+tree). */
+/* Labels a group of sidebar sections (SNMP's MIB dirs+tree, gNMI's YANG dirs+tree) and, clicked,
+   collapses/expands it - see `sidebarSectionHead()`. */
 .sidebar-section-head {
+  width: 100%;
   flex: none;
-  padding: 8px 14px 4px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px 8px;
+  font: inherit;
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.06em;
   color: var(--text-muted);
   text-transform: uppercase;
+  text-align: left;
   background: var(--bg-deep);
+  border: none;
   border-bottom: 1px solid var(--border-soft);
   border-top: 1px solid var(--border-soft);
+  cursor: pointer;
+  user-select: none;
+}
+.sidebar-section-caret {
+  width: 8px;
+  flex: none;
+  text-align: center;
+  font-size: 7px;
+  color: var(--text-dim);
 }
 
 .mib-dirs {
@@ -826,6 +843,26 @@ button {
 .splitter-line {
   width: 2px;
   height: 100%;
+  background: var(--divider-strong);
+}
+
+/* The vertical-drag counterpart to .splitter/.splitter-line, between resizable sidebar sections. */
+.splitter-h {
+  height: 7px;
+  flex: none;
+  cursor: row-resize;
+  background: transparent;
+  display: flex;
+  align-items: center;
+  position: relative;
+  z-index: 2;
+}
+.splitter-h:hover {
+  background: var(--accent-hover);
+}
+.splitter-h-line {
+  height: 2px;
+  width: 100%;
   background: var(--divider-strong);
 }
 
